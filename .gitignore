@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+Thumbs.db
+
+.env
+.env.*
+
+server-api/state/
+colab-worker/checkpoints/
+*.log

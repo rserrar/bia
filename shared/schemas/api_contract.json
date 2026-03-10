@@ -1,0 +1,80 @@
+{
+  "version": "0.1.0",
+  "resources": {
+    "runs": {
+      "create": {
+        "method": "POST",
+        "path": "/runs",
+        "body": {
+          "code_version": "string",
+          "metadata": "object"
+        },
+        "response": {
+          "run_id": "string",
+          "status": "queued|running|retrying|completed|failed|cancelled",
+          "created_at": "iso8601"
+        }
+      },
+      "heartbeat": {
+        "method": "POST",
+        "path": "/runs/{run_id}/heartbeat",
+        "response": {
+          "run_id": "string",
+          "status": "string",
+          "heartbeat_at": "iso8601"
+        }
+      },
+      "status": {
+        "method": "POST",
+        "path": "/runs/{run_id}/status",
+        "body": {
+          "status": "queued|running|retrying|completed|failed|cancelled",
+          "generation": "integer|null"
+        }
+      },
+      "get": {
+        "method": "GET",
+        "path": "/runs/{run_id}"
+      },
+      "summary": {
+        "method": "GET",
+        "path": "/runs/{run_id}/summary"
+      }
+    },
+    "events": {
+      "create": {
+        "method": "POST",
+        "path": "/runs/{run_id}/events",
+        "body": {
+          "event_type": "string",
+          "label": "string",
+          "details": "object"
+        }
+      }
+    },
+    "metrics": {
+      "create": {
+        "method": "POST",
+        "path": "/runs/{run_id}/metrics",
+        "body": {
+          "model_id": "string",
+          "generation": "integer",
+          "metrics": "object"
+        }
+      }
+    },
+    "artifacts": {
+      "create": {
+        "method": "POST",
+        "path": "/runs/{run_id}/artifacts",
+        "body": {
+          "artifact_type": "string",
+          "uri": "string",
+          "storage": "drive|server",
+          "checksum": "string|null",
+          "metadata": "object"
+        }
+      }
+    }
+  }
+}
