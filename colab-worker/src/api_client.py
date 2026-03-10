@@ -37,6 +37,9 @@ class ApiClient:
     def create_run(self, code_version: str, metadata: dict[str, Any]) -> dict[str, Any]:
         return self._request("POST", "/runs", {"code_version": code_version, "metadata": metadata})
 
+    def get_run(self, run_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/runs/{run_id}")
+
     def heartbeat(self, run_id: str) -> dict[str, Any]:
         return self._request("POST", f"/runs/{run_id}/heartbeat")
 
@@ -78,3 +81,6 @@ class ApiClient:
         if checksum:
             payload["checksum"] = checksum
         return self._request("POST", f"/runs/{run_id}/artifacts", payload)
+
+    def maintenance_watchdog(self, stale_after_seconds: int) -> dict[str, Any]:
+        return self._request("POST", "/maintenance/watchdog", {"stale_after_seconds": stale_after_seconds})

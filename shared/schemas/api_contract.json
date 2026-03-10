@@ -75,6 +75,19 @@
           "metadata": "object"
         }
       }
+    },
+    "maintenance": {
+      "watchdog": {
+        "method": "POST",
+        "path": "/maintenance/watchdog",
+        "body": {
+          "stale_after_seconds": "integer"
+        },
+        "response": {
+          "updated_count": "integer",
+          "updated_runs": "string[]"
+        }
+      }
     }
   }
 }

@@ -16,69 +16,101 @@ final class StateStore
             mkdir($dir, 0777, true);
         }
         if (!file_exists($this->filePath)) {
-            $this->write([
-                'runs' => [],
-                'events' => [],
-                'metrics' => [],
-                'artifacts' => [],
-            ]);
+            $this->write($this->emptyState());
         }
     }
 
     public function readAll(): array
     {
-        $content = file_get_contents($this->filePath);
-        if ($content === false || $content === '') {
-            return [
-                'runs' => [],
-                'events' => [],
-                'metrics' => [],
-                'artifacts' => [],
-            ];
+        $handle = fopen($this->filePath, 'c+');
+        if ($handle === false) {
+            return $this->emptyState();
+        }
+        flock($handle, LOCK_SH);
+        $content = stream_get_contents($handle);
+        flock($handle, LOCK_UN);
+        fclose($handle);
+        if ($content === false || trim($content) === '') {
+            return $this->emptyState();
         }
         $decoded = json_decode($content, true);
-        if (!is_array($decoded)) {
-            return [
-                'runs' => [],
-                'events' => [],
-                'metrics' => [],
-                'artifacts' => [],
-            ];
-        }
-        return $decoded;
+        return is_array($decoded) ? $decoded : $this->emptyState();
     }
 
     public function write(array $payload): void
     {
-        file_put_contents($this->filePath, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        $handle = fopen($this->filePath, 'c+');
+        if ($handle === false) {
+            return;
+        }
+        flock($handle, LOCK_EX);
+        ftruncate($handle, 0);
+        rewind($handle);
+        fwrite($handle, (string) json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        fflush($handle);
+        flock($handle, LOCK_UN);
+        fclose($handle);
     }
 
     public function upsertRun(array $run): void
     {
-        $state = $this->readAll();
-        $state['runs'][$run['run_id']] = $run;
-        $this->write($state);
+        $this->mutate(static function (array &$state) use ($run): void {
+            $state['runs'][$run['run_id']] = $run;
+        });
     }
 
     public function appendEvent(array $event): void
     {
-        $state = $this->readAll();
-        $state['events'][] = $event;
-        $this->write($state);
+        $this->mutate(static function (array &$state) use ($event): void {
+            $state['events'][] = $event;
+        });
     }
 
     public function appendMetric(array $metric): void
     {
-        $state = $this->readAll();
-        $state['metrics'][] = $metric;
-        $this->write($state);
+        $this->mutate(static function (array &$state) use ($metric): void {
+            $state['metrics'][] = $metric;
+        });
     }
 
     public function appendArtifact(array $artifact): void
     {
-        $state = $this->readAll();
-        $state['artifacts'][] = $artifact;
-        $this->write($state);
+        $this->mutate(static function (array &$state) use ($artifact): void {
+            $state['artifacts'][] = $artifact;
+        });
+    }
+
+    private function mutate(callable $callback): void
+    {
+        $handle = fopen($this->filePath, 'c+');
+        if ($handle === false) {
+            return;
+        }
+        flock($handle, LOCK_EX);
+        $content = stream_get_contents($handle);
+        $state = $this->emptyState();
+        if ($content !== false && trim($content) !== '') {
+            $decoded = json_decode($content, true);
+            if (is_array($decoded)) {
+                $state = $decoded;
+            }
+        }
+        $callback($state);
+        ftruncate($handle, 0);
+        rewind($handle);
+        fwrite($handle, (string) json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        fflush($handle);
+        flock($handle, LOCK_UN);
+        fclose($handle);
+    }
+
+    private function emptyState(): array
+    {
+        return [
+            'runs' => [],
+            'events' => [],
+            'metrics' => [],
+            'artifacts' => [],
+        ];
     }
 }
-

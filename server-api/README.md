@@ -19,3 +19,22 @@ Variables d'entorn opcionals:
 
 - `V2_STATE_FILE` per canviar la ruta del fitxer d'estat
 - `V2_API_TOKEN` per activar validació simple Bearer token
+- `V2_WATCHDOG_STALE_SECONDS` per ús del script watchdog
+
+## Smoke test
+
+Amb l'API en marxa:
+
+```bash
+cd V2
+python ops/scripts/smoke_test_api.py
+```
+
+## Watchdog de heartbeat
+
+Per marcar runs `queued/running` sense senyal com `retrying`:
+
+```bash
+cd V2
+python ops/scripts/watchdog_retry.py
+```

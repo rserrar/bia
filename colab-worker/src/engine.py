@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from .api_client import ApiClient
 from .checkpoint_store import CheckpointStore
 from .config import WorkerConfig
+from .legacy_model_compat import build_legacy_model_once
 
 
 @dataclass
@@ -39,7 +40,18 @@ class EvolutionWorkerEngine:
 
     def _ensure_run(self) -> None:
         if self.state.run_id:
-            return
+            try:
+                remote_run = self.api.get_run(self.state.run_id)
+            except Exception:
+                self.state.run_id = None
+            else:
+                self.state.status = str(remote_run.get("status", self.state.status))
+                remote_generation = int(remote_run.get("generation", self.state.generation))
+                if remote_generation > self.state.generation:
+                    self.state.generation = remote_generation
+                self.state.stage = "run_recovered"
+                self._save_state()
+                return
         run = self.api.create_run(self.config.code_version, self.config.run_metadata)
         self.state.run_id = run["run_id"]
         self.state.status = run["status"]
@@ -76,11 +88,40 @@ class EvolutionWorkerEngine:
         self.state.stage = "generation_completed"
         self._save_state()
 
+    def _verify_legacy_model_build_if_enabled(self) -> None:
+        if not self.config.verify_legacy_model_build:
+            return
+        run_id = self.state.run_id
+        if not run_id:
+            return
+        try:
+            result = build_legacy_model_once(
+                model_json_path=self.config.legacy_model_json_path,
+                experiment_config_path=self.config.legacy_experiment_config_path,
+                legacy_builder_path=self.config.legacy_builder_path,
+            )
+            self.api.add_event(run_id, "legacy_model_build_ok", "Compatibilitat model legacy verificada", result)
+        except Exception as error:
+            self.api.add_event(
+                run_id,
+                "legacy_model_build_error",
+                "Error en verificació de compatibilitat model legacy",
+                {"error": str(error)},
+            )
+            if self.config.legacy_build_check_strict:
+                raise
+
     def run(self) -> None:
         self._ensure_run()
         run_id = self.state.run_id
         if not run_id:
             raise RuntimeError("run_id not available")
+        if self.state.status == "completed" or self.state.generation >= self.config.max_generations:
+            self.state.status = "completed"
+            self.state.stage = "finished"
+            self._save_state()
+            return
+        self._verify_legacy_model_build_if_enabled()
         self.api.update_status(run_id, "running", self.state.generation)
         last_heartbeat = 0.0
         while self.state.generation < self.config.max_generations:

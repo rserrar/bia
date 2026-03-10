@@ -141,6 +141,51 @@ final class ApiService
         ];
     }
 
+    public function markStaleRunsRetrying(int $staleAfterSeconds): array
+    {
+        if ($staleAfterSeconds < 0) {
+            throw new RuntimeException('invalid stale_after_seconds');
+        }
+        $state = $this->store->readAll();
+        $runs = is_array($state['runs'] ?? null) ? $state['runs'] : [];
+        $now = time();
+        $updatedRunIds = [];
+        foreach ($runs as $runId => $run) {
+            $status = (string) ($run['status'] ?? '');
+            if (!in_array($status, ['queued', 'running'], true)) {
+                continue;
+            }
+            $lastSignal = (string) ($run['heartbeat_at'] ?? $run['updated_at'] ?? '');
+            $lastSignalTs = strtotime($lastSignal);
+            if ($lastSignalTs === false) {
+                continue;
+            }
+            if (($now - $lastSignalTs) < $staleAfterSeconds) {
+                continue;
+            }
+            $run['status'] = 'retrying';
+            $run['updated_at'] = $this->nowIso();
+            $this->store->upsertRun($run);
+            $this->store->appendEvent([
+                'run_id' => $runId,
+                'event_type' => 'watchdog_retry',
+                'label' => 'Run marcat com retrying per timeout de heartbeat',
+                'level' => 'warning',
+                'timestamp' => $this->nowIso(),
+                'details' => [
+                    'stale_after_seconds' => $staleAfterSeconds,
+                    'last_signal_at' => $lastSignal,
+                ],
+            ]);
+            $updatedRunIds[] = $runId;
+        }
+        return [
+            'stale_after_seconds' => $staleAfterSeconds,
+            'updated_runs' => $updatedRunIds,
+            'updated_count' => count($updatedRunIds),
+        ];
+    }
+
     private function assertStatus(string $status): void
     {
         if (!in_array($status, self::VALID_STATUSES, true)) {
@@ -153,4 +198,3 @@ final class ApiService
         return gmdate('c');
     }
 }
-

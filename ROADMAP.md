@@ -1,5 +1,7 @@
 # Roadmap V2
 
+Seguiment operatiu actual: `ops/PLAN_TRACKER.md`
+
 ## Fase 0 - Base de projecte
 
 Objectiu:
@@ -77,4 +79,3 @@ Entregables:
 2. Worker Colab resumible
 3. Persistència i fallback
 4. Frontend local
-

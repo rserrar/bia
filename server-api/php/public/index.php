@@ -123,6 +123,12 @@ try {
         );
     }
 
+    if ($method === 'POST' && $parts === ['maintenance', 'watchdog']) {
+        $body = jsonInput();
+        $staleAfterSeconds = (int) ($body['stale_after_seconds'] ?? 120);
+        respond(200, $service->markStaleRunsRetrying($staleAfterSeconds));
+    }
+
     if ($method === 'GET' && count($parts) === 2 && $parts[0] === 'runs') {
         respond(200, $service->getRun($parts[1]));
     }
