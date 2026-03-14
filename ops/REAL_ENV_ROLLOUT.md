@@ -41,5 +41,6 @@ Estimació de reutilització:
 ## Riscos i mitigació
 
 - TensorFlow no disponible en local: executar build legacy a Colab
+- Assets legacy fora de `V2/*`: guardar-los a Drive (`/content/drive/MyDrive/bia_legacy_assets/`)
 - API sense persistència avançada: mantenir còpia d'estat i snapshots
 - Tall de sessió Colab: checkpoint cada pas i recuperació de run existent

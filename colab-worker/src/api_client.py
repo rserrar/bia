@@ -7,32 +7,72 @@ import requests
 
 
 class ApiClient:
-    def __init__(self, base_url: str, token: str = "", timeout_seconds: int = 20) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        token: str = "",
+        timeout_seconds: int = 20,
+        api_path_prefix: str = "",
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.headers = {"Content-Type": "application/json"}
+        self.api_path_prefix = self._normalize_prefix(api_path_prefix)
+        self._resolved_prefix: str | None = self.api_path_prefix if self.api_path_prefix else None
         if token:
             self.headers["Authorization"] = f"Bearer {token}"
 
     def _request(self, method: str, path: str, payload: dict[str, Any] | None = None, max_retries: int = 3) -> dict[str, Any]:
-        url = f"{self.base_url}{path}"
         attempt = 0
         while True:
             try:
-                response = requests.request(
-                    method=method,
-                    url=url,
-                    json=payload,
-                    headers=self.headers,
-                    timeout=self.timeout_seconds,
-                )
-                response.raise_for_status()
-                return response.json()
+                last_error: Exception | None = None
+                for prefix in self._candidate_prefixes():
+                    url = f"{self.base_url}{prefix}{path}"
+                    response = requests.request(
+                        method=method,
+                        url=url,
+                        json=payload,
+                        headers=self.headers,
+                        timeout=self.timeout_seconds,
+                    )
+                    if response.status_code == 404:
+                        last_error = requests.HTTPError(f"404 for {url}", response=response)
+                        continue
+                    response.raise_for_status()
+                    self._resolved_prefix = prefix
+                    if not response.text:
+                        return {}
+                    return response.json()
+                if last_error is not None:
+                    raise last_error
+                raise RuntimeError("request failed without response")
             except Exception:
                 attempt += 1
                 if attempt >= max_retries:
                     raise
                 time.sleep(min(2 ** attempt, 10))
+
+    def _candidate_prefixes(self) -> list[str]:
+        if self._resolved_prefix is not None:
+            return [self._resolved_prefix]
+        seen: set[str] = set()
+        prefixes: list[str] = []
+        for candidate in ["", "/public/index.php", "/public", self.api_path_prefix]:
+            normalized = self._normalize_prefix(candidate)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            prefixes.append(normalized)
+        return prefixes
+
+    def _normalize_prefix(self, prefix: str) -> str:
+        cleaned = (prefix or "").strip()
+        if cleaned == "":
+            return ""
+        if not cleaned.startswith("/"):
+            cleaned = "/" + cleaned
+        return cleaned.rstrip("/")
 
     def create_run(self, code_version: str, metadata: dict[str, Any]) -> dict[str, Any]:
         return self._request("POST", "/runs", {"code_version": code_version, "metadata": metadata})
@@ -84,3 +124,27 @@ class ApiClient:
 
     def maintenance_watchdog(self, stale_after_seconds: int) -> dict[str, Any]:
         return self._request("POST", "/maintenance/watchdog", {"stale_after_seconds": stale_after_seconds})
+
+    def process_model_proposals_phase0(self, limit: int = 20) -> dict[str, Any]:
+        return self._request("POST", "/maintenance/process-model-proposals-phase0", {"limit": limit})
+
+    def create_model_proposal(
+        self,
+        source_run_id: str,
+        base_model_id: str,
+        proposal: dict[str, Any],
+        llm_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/model-proposals",
+            {
+                "source_run_id": source_run_id,
+                "base_model_id": base_model_id,
+                "proposal": proposal,
+                "llm_metadata": llm_metadata or {},
+            },
+        )
+
+    def enqueue_model_proposal_phase0(self, proposal_id: str) -> dict[str, Any]:
+        return self._request("POST", f"/model-proposals/{proposal_id}/enqueue-phase0")

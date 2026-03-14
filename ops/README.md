@@ -6,6 +6,7 @@ Document de desplegament real:
 
 - `REAL_ENV_ROLLOUT.md`
 - `PLAN_TRACKER.md`
+- `IMPLEMENTATION_TODO.md`
 
 ## Scripts disponibles
 

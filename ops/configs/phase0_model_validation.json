@@ -19,7 +19,7 @@
   "models": [
     {
       "model_json_path": "/content/b-ia/models/base/model_exemple_complex_v1.json",
-      "profile": "smoke",
+      "profile": "stability",
       "enabled": true
     }
   ]

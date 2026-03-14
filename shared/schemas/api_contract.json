@@ -87,6 +87,53 @@
           "updated_count": "integer",
           "updated_runs": "string[]"
         }
+      },
+      "process_model_proposals_phase0": {
+        "method": "POST",
+        "path": "/maintenance/process-model-proposals-phase0",
+        "body": {
+          "limit": "integer"
+        },
+        "response": {
+          "processed_count": "integer",
+          "processed": "object[]"
+        }
+      }
+    },
+    "model_proposals": {
+      "create": {
+        "method": "POST",
+        "path": "/model-proposals",
+        "body": {
+          "source_run_id": "string",
+          "base_model_id": "string",
+          "proposal": "object",
+          "llm_metadata": "object"
+        },
+        "response": {
+          "proposal_id": "string",
+          "status": "draft|queued_phase0|validated_phase0|accepted|rejected",
+          "created_at": "iso8601"
+        }
+      },
+      "list": {
+        "method": "GET",
+        "path": "/model-proposals?limit=integer"
+      },
+      "get": {
+        "method": "GET",
+        "path": "/model-proposals/{proposal_id}"
+      },
+      "status": {
+        "method": "POST",
+        "path": "/model-proposals/{proposal_id}/status",
+        "body": {
+          "status": "draft|queued_phase0|validated_phase0|accepted|rejected"
+        }
+      },
+      "enqueue_phase0": {
+        "method": "POST",
+        "path": "/model-proposals/{proposal_id}/enqueue-phase0"
       }
     }
   }

@@ -1,6 +1,7 @@
 # Roadmap V2
 
 Seguiment operatiu actual: `ops/PLAN_TRACKER.md`
+TODO d'implementació actual: `ops/IMPLEMENTATION_TODO.md`
 
 ## Fase 0 - Base de projecte
 

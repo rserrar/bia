@@ -80,6 +80,34 @@ final class StateStore
         });
     }
 
+    public function appendModelProposal(array $proposal): void
+    {
+        $this->mutate(static function (array &$state) use ($proposal): void {
+            $state['model_proposals'][] = $proposal;
+        });
+    }
+
+    public function replaceModelProposal(string $proposalId, array $proposal): void
+    {
+        $this->mutate(static function (array &$state) use ($proposalId, $proposal): void {
+            $proposals = is_array($state['model_proposals'] ?? null) ? $state['model_proposals'] : [];
+            foreach ($proposals as $index => $candidate) {
+                if ((string) ($candidate['proposal_id'] ?? '') === $proposalId) {
+                    $proposals[$index] = $proposal;
+                    $state['model_proposals'] = $proposals;
+                    return;
+                }
+            }
+            $proposals[] = $proposal;
+            $state['model_proposals'] = $proposals;
+        });
+    }
+
+    public function resetAll(): void
+    {
+        $this->write($this->emptyState());
+    }
+
     private function mutate(callable $callback): void
     {
         $handle = fopen($this->filePath, 'c+');
@@ -111,6 +139,7 @@ final class StateStore
             'events' => [],
             'metrics' => [],
             'artifacts' => [],
+            'model_proposals' => [],
         ];
     }
 }

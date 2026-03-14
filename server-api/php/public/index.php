@@ -3,10 +3,53 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../src/StateStore.php';
+if (is_file(__DIR__ . '/../src/SqliteStateStore.php')) {
+    require_once __DIR__ . '/../src/SqliteStateStore.php';
+}
 require_once __DIR__ . '/../src/ApiService.php';
 
 use V2ServerApi\ApiService;
+use V2ServerApi\SqliteStateStore;
 use V2ServerApi\StateStore;
+
+function loadDotEnvFiles(array $paths): void
+{
+    foreach ($paths as $path) {
+        if (!is_string($path) || $path === '' || !is_file($path)) {
+            continue;
+        }
+        $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        if ($lines === false) {
+            continue;
+        }
+        foreach ($lines as $line) {
+            $trimmed = trim((string) $line);
+            if ($trimmed === '' || str_starts_with($trimmed, '#')) {
+                continue;
+            }
+            if (str_starts_with($trimmed, 'export ')) {
+                $trimmed = trim(substr($trimmed, 7));
+            }
+            $separatorPos = strpos($trimmed, '=');
+            if ($separatorPos === false || $separatorPos < 1) {
+                continue;
+            }
+            $key = trim(substr($trimmed, 0, $separatorPos));
+            $value = trim(substr($trimmed, $separatorPos + 1));
+            if ($key === '' || getenv($key) !== false) {
+                continue;
+            }
+            $firstChar = $value !== '' ? $value[0] : '';
+            $lastChar = $value !== '' ? $value[strlen($value) - 1] : '';
+            if (($firstChar === '"' && $lastChar === '"') || ($firstChar === "'" && $lastChar === "'")) {
+                $value = substr($value, 1, -1);
+            }
+            putenv("{$key}={$value}");
+            $_ENV[$key] = $value;
+            $_SERVER[$key] = $value;
+        }
+    }
+}
 
 function envValue(string $key, string $default = ''): string
 {
@@ -16,6 +59,12 @@ function envValue(string $key, string $default = ''): string
     }
     return $value;
 }
+
+loadDotEnvFiles([
+    getenv('V2_DOTENV_PATH') ?: '',
+    __DIR__ . '/../.env',
+    __DIR__ . '/../../.env',
+]);
 
 function jsonInput(): array
 {
@@ -54,16 +103,64 @@ function requireTokenIfConfigured(): void
     }
 }
 
-$stateFile = envValue('V2_STATE_FILE', realpath(__DIR__ . '/..') . '/../state/state.json');
-$store = new StateStore($stateFile);
+function requestPathParts(): array
+{
+    $requestPath = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
+    $path = is_string($requestPath) ? $requestPath : '/';
+    $scriptName = (string) ($_SERVER['SCRIPT_NAME'] ?? '');
+    $scriptDir = rtrim(str_replace('\\', '/', dirname($scriptName)), '/');
+    $prefixes = [
+        $scriptName,
+        $scriptDir,
+        '/index.php',
+    ];
+    foreach ($prefixes as $prefix) {
+        if (!is_string($prefix) || $prefix === '' || $prefix === '/' || $prefix === '.') {
+            continue;
+        }
+        if ($path === $prefix) {
+            $path = '/';
+            break;
+        }
+        if (str_starts_with($path, $prefix . '/')) {
+            $path = substr($path, strlen($prefix));
+            if ($path === false || $path === '') {
+                $path = '/';
+            }
+            break;
+        }
+    }
+    $trimmed = trim($path, '/');
+    return $trimmed === '' ? [] : explode('/', $trimmed);
+}
+
+try {
+    $storageBackend = strtolower(envValue('V2_STORAGE_BACKEND', 'json'));
+    if ($storageBackend === 'sqlite') {
+        $sqlitePath = envValue('V2_SQLITE_PATH', realpath(__DIR__ . '/..') . '/../state/state.sqlite');
+        try {
+            $store = new SqliteStateStore($sqlitePath);
+        } catch (Throwable $error) {
+            $fallbackToJson = in_array(strtolower(envValue('V2_STORAGE_FALLBACK_JSON', 'true')), ['1', 'true', 'yes'], true);
+            if (!$fallbackToJson) {
+                respond(500, ['error' => 'storage_init_error', 'backend' => 'sqlite', 'detail' => $error->getMessage()]);
+            }
+            $stateFile = envValue('V2_STATE_FILE', realpath(__DIR__ . '/..') . '/../state/state.json');
+            $store = new StateStore($stateFile);
+        }
+    } else {
+        $stateFile = envValue('V2_STATE_FILE', realpath(__DIR__ . '/..') . '/../state/state.json');
+        $store = new StateStore($stateFile);
+    }
+} catch (Throwable $error) {
+    respond(500, ['error' => 'storage_init_error', 'detail' => $error->getMessage()]);
+}
 $service = new ApiService($store);
 
 requireTokenIfConfigured();
 
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-$path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
-$path = is_string($path) ? trim($path, '/') : '';
-$parts = $path === '' ? [] : explode('/', $path);
+$parts = requestPathParts();
 
 try {
     if ($method === 'POST' && $parts === ['runs']) {
@@ -129,6 +226,56 @@ try {
         respond(200, $service->markStaleRunsRetrying($staleAfterSeconds));
     }
 
+    if ($method === 'POST' && $parts === ['maintenance', 'process-model-proposals-phase0']) {
+        $body = jsonInput();
+        $limit = (int) ($body['limit'] ?? 20);
+        respond(200, $service->processQueuedModelProposalsPhase0($limit));
+    }
+
+    if ($method === 'POST' && $parts === ['model-proposals']) {
+        $body = jsonInput();
+        respond(
+            201,
+            $service->createModelProposal(
+                (string) ($body['source_run_id'] ?? ''),
+                (string) ($body['base_model_id'] ?? ''),
+                is_array($body['proposal'] ?? null) ? $body['proposal'] : [],
+                is_array($body['llm_metadata'] ?? null) ? $body['llm_metadata'] : []
+            )
+        );
+    }
+
+    if ($method === 'GET' && $parts === ['model-proposals']) {
+        $limitParam = $_GET['limit'] ?? '100';
+        $limit = is_numeric($limitParam) ? (int) $limitParam : 100;
+        if ($limit <= 0) {
+            $limit = 100;
+        }
+        respond(200, ['model_proposals' => $service->listModelProposals($limit)]);
+    }
+
+    if ($method === 'GET' && count($parts) === 2 && $parts[0] === 'model-proposals') {
+        respond(200, $service->getModelProposal($parts[1]));
+    }
+
+    if ($method === 'POST' && count($parts) === 3 && $parts[0] === 'model-proposals' && $parts[2] === 'status') {
+        $body = jsonInput();
+        respond(200, $service->updateModelProposalStatus($parts[1], (string) ($body['status'] ?? '')));
+    }
+
+    if ($method === 'POST' && count($parts) === 3 && $parts[0] === 'model-proposals' && $parts[2] === 'enqueue-phase0') {
+        respond(200, $service->enqueueModelProposalPhase0($parts[1]));
+    }
+
+    if ($method === 'GET' && $parts === ['runs']) {
+        $limitParam = $_GET['limit'] ?? '100';
+        $limit = is_numeric($limitParam) ? (int) $limitParam : 100;
+        if ($limit <= 0) {
+            $limit = 100;
+        }
+        respond(200, ['runs' => $service->listRuns($limit)]);
+    }
+
     if ($method === 'GET' && count($parts) === 2 && $parts[0] === 'runs') {
         respond(200, $service->getRun($parts[1]));
     }
@@ -137,10 +284,19 @@ try {
         respond(200, $service->getSummary($parts[1]));
     }
 
+    if ($method === 'GET' && count($parts) === 3 && $parts[0] === 'runs' && $parts[2] === 'events') {
+        $limitParam = $_GET['limit'] ?? '200';
+        $limit = is_numeric($limitParam) ? (int) $limitParam : 200;
+        if ($limit <= 0) {
+            $limit = 200;
+        }
+        respond(200, ['events' => $service->listRunEvents($parts[1], $limit)]);
+    }
+
     respond(404, ['error' => 'not_found']);
 } catch (RuntimeException $error) {
     $message = $error->getMessage();
-    if ($message === 'run not found') {
+    if ($message === 'run not found' || $message === 'proposal not found') {
         respond(404, ['error' => $message]);
     }
     respond(400, ['error' => $message]);

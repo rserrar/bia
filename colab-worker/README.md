@@ -12,11 +12,50 @@ Guia de notebook per prova real:
 
 El worker pot verificar que una definició de model de la versió antiga es continua construint.
 Per executar aquesta verificació cal tenir TensorFlow instal·lat a l'entorn.
+Per defecte, el notebook fa servir aquestes rutes:
+
+- `/content/b-ia/models/base/model_exemple_complex_v1.json`
+- `/content/b-ia/config_experiment.json`
+- `/content/b-ia/utils/model_builder.py`
+
+Si en algun entorn no existeixen, es poden apuntar manualment a Drive amb les variables `V2_LEGACY_*`.
 
 Variables:
 
+- `V2_API_BASE_URL`
+- `V2_API_PATH_PREFIX`
+- `V2_API_TOKEN`
 - `V2_VERIFY_LEGACY_MODEL_BUILD`
 - `V2_LEGACY_BUILD_CHECK_STRICT`
 - `V2_LEGACY_MODEL_JSON_PATH`
 - `V2_LEGACY_EXPERIMENT_CONFIG_PATH`
 - `V2_LEGACY_BUILDER_PATH`
+- `V2_AUTO_PROCESS_PROPOSALS_PHASE0`
+- `V2_PROPOSALS_PHASE0_BATCH_SIZE`
+- `V2_LLM_ENABLED`
+- `V2_LLM_USE_LEGACY_INTERFACE`
+- `V2_LLM_PROVIDER`
+- `V2_LLM_ENDPOINT`
+- `V2_LLM_API_KEY`
+- `V2_LLM_MODEL`
+- `V2_LLM_TIMEOUT_SECONDS`
+- `V2_LLM_TEMPERATURE`
+- `V2_LLM_MAX_TOKENS`
+- `V2_LLM_SYSTEM_PROMPT`
+- `V2_LLM_CONFIG_FILE`
+- `V2_LLM_PROMPT_TEMPLATE_FILE`
+- `V2_LLM_ARCHITECTURE_GUIDE_FILE`
+- `V2_LLM_EXPERIMENT_CONFIG_FILE`
+- `V2_LLM_NUM_NEW_MODELS`
+- `V2_LLM_NUM_REFERENCE_MODELS`
+- `V2_TRIAL_MAX_GENERATIONS`
+- `V2_TRIAL_HEARTBEAT_SECONDS`
+- `V2_TRIAL_CODE_VERSION`
+- `V2_TRIAL_VERIFY_LEGACY`
+
+Quan `V2_AUTO_PROCESS_PROPOSALS_PHASE0=true`, el worker processa automàticament propostes en estat `queued_phase0`.
+El client API prova automàticament els prefixes ``, `/public/index.php` i `/public` quan rep 404.
+Quan `V2_LLM_ENABLED=true`, el worker genera propostes de model per generació i les envia a `/model-proposals`.
+Amb `V2_LLM_USE_LEGACY_INTERFACE=true` reaprofita `utils/llm_interface.py` existent; si no, usa client OpenAI-compatible intern.
+`V2_LLM_CONFIG_FILE` permet carregar clau i model des de JSON (ex: `config/llm_settings.json`) i admet `openai_api_key_env_var`.
+Per prova de múltiples generacions curtes: `python ops/scripts/run_multi_generation_trial.py`.

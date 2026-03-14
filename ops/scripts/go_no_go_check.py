@@ -8,19 +8,56 @@ import urllib.request
 from pathlib import Path
 
 
-def request_json(method: str, url: str, payload: dict | None = None, token: str = "") -> dict:
+def _normalize_prefix(prefix: str) -> str:
+    value = (prefix or "").strip()
+    if value == "":
+        return ""
+    if not value.startswith("/"):
+        value = "/" + value
+    return value.rstrip("/")
+
+
+def _candidate_urls(api_base_url: str, path: str) -> list[str]:
+    configured = _normalize_prefix(os.getenv("V2_API_PATH_PREFIX", ""))
+    seen: set[str] = set()
+    urls: list[str] = []
+    for prefix in [configured, "", "/public/index.php", "/public"]:
+        normalized = _normalize_prefix(prefix)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        urls.append(f"{api_base_url}{normalized}{path}")
+    return urls
+
+
+def request_json(method: str, api_base_url: str, path: str, payload: dict | None = None, token: str = "") -> dict:
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
-    request = urllib.request.Request(url=url, method=method, data=body, headers=headers)
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            body = response.read().decode("utf-8")
-            return json.loads(body) if body else {}
-    except urllib.error.HTTPError as error:
-        detail = error.read().decode("utf-8")
-        raise RuntimeError(f"{method} {url} failed: {error.code} {detail}") from error
+    last_error: Exception | None = None
+    for url in _candidate_urls(api_base_url, path):
+        request = urllib.request.Request(url=url, method=method, data=body, headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                response_body = response.read().decode("utf-8")
+                result = json.loads(response_body) if response_body else {}
+                if isinstance(result, dict):
+                    result["_resolved_url"] = url
+                return result
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                last_error = error
+                continue
+            detail = error.read().decode("utf-8")
+            raise RuntimeError(f"{method} {url} failed: {error.code} {detail}") from error
+    if isinstance(last_error, urllib.error.HTTPError):
+        detail = last_error.read().decode("utf-8")
+        raise RuntimeError(
+            f"{method} {path} failed with 404 on all prefixes. "
+            f"Configura V2_API_PATH_PREFIX. Last detail: {detail}"
+        ) from last_error
+    raise RuntimeError(f"{method} {path} failed without response")
 
 
 def main() -> int:
@@ -43,7 +80,8 @@ def main() -> int:
         try:
             request_json(
                 "POST",
-                f"{api_base_url}/runs",
+                api_base_url,
+                "/runs",
                 {"code_version": "go-no-go-check", "metadata": {"source": "ops/scripts/go_no_go_check.py"}},
                 token=token,
             )

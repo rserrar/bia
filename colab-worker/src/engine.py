@@ -3,10 +3,18 @@ from __future__ import annotations
 import time
 from dataclasses import asdict, dataclass
 
-from .api_client import ApiClient
-from .checkpoint_store import CheckpointStore
-from .config import WorkerConfig
-from .legacy_model_compat import build_legacy_model_once
+try:
+    from .api_client import ApiClient
+    from .checkpoint_store import CheckpointStore
+    from .config import WorkerConfig
+    from .legacy_model_compat import build_legacy_model_once
+    from .llm_client import LlmConfig, LlmProposalClient
+except ImportError:
+    from api_client import ApiClient
+    from checkpoint_store import CheckpointStore
+    from config import WorkerConfig
+    from legacy_model_compat import build_legacy_model_once
+    from llm_client import LlmConfig, LlmProposalClient
 
 
 @dataclass
@@ -23,6 +31,25 @@ class EvolutionWorkerEngine:
         self.api = api_client
         self.checkpoints = checkpoint_store
         self.state = self._load_state()
+        self.llm = LlmProposalClient(
+            LlmConfig(
+                enabled=self.config.llm_enabled,
+                use_legacy_interface=self.config.llm_use_legacy_interface,
+                provider=self.config.llm_provider,
+                endpoint=self.config.llm_endpoint,
+                api_key=self.config.llm_api_key,
+                model=self.config.llm_model,
+                timeout_seconds=self.config.llm_timeout_seconds,
+                temperature=self.config.llm_temperature,
+                max_tokens=self.config.llm_max_tokens,
+                system_prompt=self.config.llm_system_prompt,
+                prompt_template_file=self.config.llm_prompt_template_file,
+                architecture_guide_file=self.config.llm_architecture_guide_file,
+                experiment_config_file=self.config.llm_experiment_config_file,
+                num_new_models=self.config.llm_num_new_models,
+                num_reference_models=self.config.llm_num_reference_models,
+            )
+        )
 
     def _load_state(self) -> WorkerState:
         data = self.checkpoints.load()
@@ -76,6 +103,7 @@ class EvolutionWorkerEngine:
             "models_evaluated": 3,
         }
         self.api.add_metric(run_id, model_id=f"gen_{generation}_summary", generation=generation, metrics=simulated_metric)
+        self._create_model_proposal_if_enabled(run_id, generation, simulated_metric)
         self.api.add_artifact(
             run_id,
             artifact_type="checkpoint",
@@ -87,6 +115,49 @@ class EvolutionWorkerEngine:
         self.state.generation = generation + 1
         self.state.stage = "generation_completed"
         self._save_state()
+
+    def _create_model_proposal_if_enabled(self, run_id: str, generation: int, metrics: dict[str, float | int]) -> None:
+        if not self.config.llm_enabled:
+            return
+        context = {
+            "run_id": run_id,
+            "generation": generation,
+            "latest_metrics": metrics,
+            "code_version": self.config.code_version,
+        }
+        try:
+            candidate = self.llm.generate_candidate(context)
+            if not candidate:
+                return
+            base_model_id = str(candidate.get("base_model_id", "")).strip() or "unknown_base_model"
+            proposal = candidate.get("proposal")
+            if not isinstance(proposal, dict) or len(proposal) == 0:
+                raise RuntimeError("LLM candidate proposal is invalid")
+            llm_metadata = candidate.get("llm_metadata")
+            llm_metadata_payload = llm_metadata if isinstance(llm_metadata, dict) else {}
+            llm_metadata_payload["from_generation"] = generation
+            created = self.api.create_model_proposal(
+                source_run_id=run_id,
+                base_model_id=base_model_id,
+                proposal=proposal,
+                llm_metadata=llm_metadata_payload,
+            )
+            proposal_id = str(created.get("proposal_id", ""))
+            if proposal_id != "":
+                self.api.enqueue_model_proposal_phase0(proposal_id)
+            self.api.add_event(
+                run_id,
+                "llm_proposal_created",
+                f"Proposta LLM creada a generació {generation}",
+                {"proposal_id": proposal_id, "base_model_id": base_model_id},
+            )
+        except Exception as error:
+            self.api.add_event(
+                run_id,
+                "llm_proposal_error",
+                f"Error creant proposta LLM a generació {generation}",
+                {"error": str(error)},
+            )
 
     def _verify_legacy_model_build_if_enabled(self) -> None:
         if not self.config.verify_legacy_model_build:
@@ -111,6 +182,30 @@ class EvolutionWorkerEngine:
             if self.config.legacy_build_check_strict:
                 raise
 
+    def _process_queued_proposals_phase0_if_enabled(self) -> None:
+        if not self.config.auto_process_proposals_phase0:
+            return
+        run_id = self.state.run_id
+        if not run_id:
+            return
+        try:
+            result = self.api.process_model_proposals_phase0(self.config.proposals_phase0_batch_size)
+            processed_count = int(result.get("processed_count", 0))
+            if processed_count > 0:
+                self.api.add_event(
+                    run_id,
+                    "proposal_phase0_auto_processed",
+                    f"Propostes processades automàticament: {processed_count}",
+                    result,
+                )
+        except Exception as error:
+            self.api.add_event(
+                run_id,
+                "proposal_phase0_auto_process_error",
+                "Error en processament automàtic de proposals queued_phase0",
+                {"error": str(error)},
+            )
+
     def run(self) -> None:
         self._ensure_run()
         run_id = self.state.run_id
@@ -122,15 +217,19 @@ class EvolutionWorkerEngine:
             self._save_state()
             return
         self._verify_legacy_model_build_if_enabled()
+        self._process_queued_proposals_phase0_if_enabled()
         self.api.update_status(run_id, "running", self.state.generation)
         last_heartbeat = 0.0
         while self.state.generation < self.config.max_generations:
             now = time.time()
             if now - last_heartbeat >= self.config.heartbeat_interval_seconds:
                 self._send_heartbeat()
+                self._process_queued_proposals_phase0_if_enabled()
                 last_heartbeat = now
             self._run_generation_step(self.state.generation)
+            self._process_queued_proposals_phase0_if_enabled()
             time.sleep(1)
+        self._process_queued_proposals_phase0_if_enabled()
         self.api.update_status(run_id, "completed", self.state.generation)
         self.api.add_event(run_id, "run_completed", "Execució finalitzada")
         self.state.status = "completed"
