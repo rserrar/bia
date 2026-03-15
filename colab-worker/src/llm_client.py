@@ -68,14 +68,10 @@ class LlmProposalClient:
         return self._generate_openai_compatible(context)
 
     def _generate_with_legacy_interface(self, context: dict[str, Any]) -> dict[str, Any] | None:
+        from shared.clients.llm_interface import ask_openai  # type: ignore[import]
+        from v2_prompt_builder import V2PromptBuilder
+
         repo_root = Path(__file__).resolve().parents[3]
-        if str(repo_root) not in sys.path:
-            sys.path.insert(0, str(repo_root))
-        try:
-            from utils.llm_interface import ask_openai
-            from v2_prompt_builder import V2PromptBuilder
-        except Exception:
-            return None
         prompt_builder = V2PromptBuilder(
             repo_root=repo_root,
             prompt_template_file=self.config.prompt_template_file,
@@ -527,13 +523,7 @@ class LlmProposalClient:
         return prompt
 
     def _repair_with_legacy_interface(self, prompt_text: str, context: dict[str, Any]) -> dict[str, Any] | None:
-        repo_root = Path(__file__).resolve().parents[3]
-        if str(repo_root) not in sys.path:
-            sys.path.insert(0, str(repo_root))
-        try:
-            from utils.llm_interface import ask_openai
-        except Exception:
-            return None
+        from shared.clients.llm_interface import ask_openai  # type: ignore[import]
         llm_config = {
             "openai_api_key": self.config.api_key or os.getenv("OPENAI_API_KEY", ""),
             "api_url": self._resolve_endpoint(self.config.endpoint),

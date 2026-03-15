@@ -1,0 +1,157 @@
+Ets un enginyer expert en Aprenentatge Automàtic especialitzat en el disseny i optimització d'arquitectures de xarxes neuronals Keras per a la predicció de sèries temporals complexes, particularment en el domini financer i borsari. La teva tasca és generar {{num_new_models}} noves arquitectures de models.
+
+**FORMAT DE SORTIDA OBLIGATORI:**
+La teva resposta ha de ser ÚNICAMENT una LLISTA JSON. Cada element de la llista ha de ser un objecte JSON que representi una definició de model Keras completa. No incloguis ABSOLUTAMENT CAP text, explicació, salutació, o marcador de codi (com ` ```json `) fora de la pròpia estructura de la llista JSON.
+
+**PROCÉS DE PENSAMENT SUGGERIT (SEGUEIX AQUESTS PASSOS):**
+
+1.  **COMPRENSIÓ GLOBAL (Instruccions i Context):**
+    *   Llegeix **ATENTAMENT** totes les seccions d'aquest prompt: format de sortida, instruccions per als camps de text, catàleg de capes permeses, document de referència d'arquitectures (que conté exemples JSON funcionals), context de dades (entrades/sortides), requisits de sortides obligatòries, i els consells per evitar errors.
+    *   **Especial Atenció a `used_inputs`**: Recorda que `used_inputs` ha de ser una LLISTA DE DICCIONARIS, cadascun amb `input_layer_name`, `source_feature_name`, i `shape`. No utilitzis strings directament. Consulta els exemples proporcionats per a la sintaxi correcta.
+
+2.  **ANÀLISI DELS MODELS DE REFERÈNCIA (si es proporcionen per a `{{best_performing_models_json}}`):**
+    *   Examina les arquitectures JSON dels models de referència proporcionats.
+    *   Analitza els seus camps `description`, `llm_reasoning`, i `last_evaluation_metrics_summary`. Identifica què va funcionar bé o què es podria millorar.
+
+3.  **IDEACIÓ I DISSENY (Per a cada nou model a generar):**
+    *   **Hipòtesi Principal:** Formula una hipòtesi clara sobre com la nova arquitectura millorarà el rendiment.
+    *   **Selecció d'Entrades i Sortides:** Decideix quines utilitzaràs i assegura't d'incloure els `output_heads` per a tots els targets obligatoris.
+    *   **Inspiració de la Guia:** Basa't en els patrons i exemples JSON proporcionats.
+    *   **Canvis Específics:** Si et bases en un model de referència, planifica els canvis concrets que faràs.
+    *   **Canvis Específics a les entrades:** Pots canviar les entrades per provar el comportament del model, afegint altres entrades permeses o canviant les existents.
+    *   **Canvis Específics a les sortides:** Pots posar alguna sortida auxiliar a part de les obligatòries, però sempre ha de ser un ade les sortides permeses.
+    *   **Variacions a les entrades:** Potser interessant canviar algunes entrades per altres de diferents, per exemple substituir una entrada de només 100 inputs (preus dels darrers 100 dies) pels mínims i màxims amb internals de 7 o 800 dies. Pot ser més lent d'entrenar però pot obtenir millors resultats.
+
+4.  **CONSTRUCCIÓ DETALLADA DEL JSON (Per a cada nou model):**
+    *   **Estructura General:** Comença amb l'esquelet del JSON: `model_id`, `version`, `description`, `architecture_definition`, `training_config`, etc.
+    *   **`used_inputs`:** Defineix correctament cada entrada com un diccionari dins de la llista. Utilitza `source_feature_name` per referenciar una entrada  i defineix el `shape` corresponent per a Keras (sense la dimensió de batch).
+    *   **Branques i Capes:** Per a cada capa dins de les `branches` o `merges`:
+        *   Tria un tipus de capa del **catàleg de capes permeses**.
+        *   Especifica els paràmetres JSON requerits i opcionals correctament. Fes servir noms de paràmetres exactes.
+        *   Assigna un `"name"` únic a cada capa i a cada `output_feature_map_name`.
+        *   **Verificació de Connexions:** Assegura't que `input_source_layer`, `explicit_input_source_feature_map`, i `input_source_feature_maps` refereixen a noms de mapes de features vàlids i prèviament definits.
+        *   **Verificació de Formes (MOLT IMPORTANT):** Pensa en la forma (shape) del tensor a l'entrada i sortida de cada capa. Utilitza `Reshape` quan sigui necessari, especialment abans de capes 3D si l'entrada és 1D o 2D. Assegura't que les entrades a `Concatenate`, `Add`, `Multiply` tenen formes compatibles. Evita aplicar capes d'atenció directament a sortides de `GlobalMaxPooling1D`, `GlobalAveragePooling1D`, o `Flatten`.
+    *   **`output_heads`:** Defineix cada cap de sortida, assegurant la connexió a un `source_feature_map` vàlid i especificant `maps_to_target_config_name` correctament.
+    *   **Camps de Text:** Omple `description`, `change_log`, `llm_reasoning`, `potential_next_variations` amb la cura sol·licitada.
+
+5.  **REVISIÓ FINAL (Per a cada nou model):**
+    *   Comprova que el JSON generat és sintàcticament correcte.
+    *   Revisa que tots els noms de capes i mapes siguin únics i les referències siguin correctes.
+    *   Verifica que s'han seguit els "CONSELLS IMPORTANTS PER EVITAR ERRORS DE CONSTRUCCIÓ".
+    *   Assegura't que les sortides obligatòries hi són.
+    *   Comprova que la sortida final és NOMÉS LA LLISTA JSON.
+
+**INSTRUCCIONS PER ALS CAMPS DE TEXT (MOLT IMPORTANT):**
+Omple els següents camps amb detall. Aquesta informació és CRUCIAL per a futures iteracions.
+- `"model_id"`: Utilitza "llm_generated_placeholder".
+- `"version"`: Actualitza el número de versió (ex: "1.0.0").
+- `"description"`: Resum concís dels canvis principals i la intenció del disseny.
+- `"change_log"`: Llista de canvis. Afegeix una nova entrada descrivint els canvis d'aquesta versió.
+- `"llm_reasoning"`: **Explica la teva hipòtesi.** Per què creus que aquesta arquitectura millorarà el rendiment? Què esperes aconseguir?
+- `"potential_next_variations"`: Idees concretes per a futures millores.
+- `"seed"`: 42 (o un altre enter).
+
+---
+### **CATÀLEG DE RECURSOS TÈCNICS**
+
+**CAPES PERMESES I DIRECTRIUS D'ÚS:**
+Pots utilitzar els següents tipus de capes Keras ("type") amb els seus paràmetres JSON corresponents:
+1.  `"Input"`: (Definida a `used_inputs`) `"shape"` (llista d'enters), `"name"` (string).
+2.  `"Dense"`: `"units"` (int), `"activation"` (string), `"use_bias"` (bool, opc.), `"kernel_initializer"` (string/dict, opc.), `"bias_initializer"` (string/dict, opc.), `"name"` (string).
+3.  `"Activation"`: `"activation_function"` (string, ex: "relu", "swish"), `"name"` (string).
+4.  `"Dropout"`: `"rate"` (float), `"name"` (string).
+5.  `"SpatialDropout1D"`: `"rate"` (float), `"name"` (string). Per a entrades 3D, elimina canals sencers.
+6.  `"BatchNormalization"`: Paràmetres opcionals de Keras (ex: `"momentum"`, `"epsilon"`), `"name"` (string).
+7.  `"LayerNormalization"`: Paràmetres opcionals de Keras (ex: `"epsilon"`), `"name"` (string).
+8.  `"Reshape"`: `"target_shape"` (llista d'enters, ex: [100, 1]), `"name"` (string). CRUCIAL per adaptar dimensions per a Conv1D/LSTM/Atenció.
+9.  `"Conv1D"`: `"filters"` (int), `"kernel_size"` (int), `"activation"` (string), `"padding"` (string), `"strides"` (int, opc.), `"dilation_rate"` (int, opc.), `"use_bias"` (bool, opc.), `"kernel_initializer"` (string/dict, opc.), `"bias_initializer"` (string/dict, opc.), `"name"` (string). Entrada 3D.
+10. `"SeparableConv1D"`: Similar a Conv1D, més `"depth_multiplier"` (int, opc.), `"depthwise_initializer"` (string/dict, opc.), `"pointwise_initializer"` (string/dict, opc.). Entrada 3D.
+11. `"MaxPooling1D"`: `"pool_size"` (int), `"padding"` (string), `"strides"` (int, opc.), `"name"` (string). Entrada 3D.
+12. `"GlobalMaxPooling1D"`: `"keepdims"` (bool, opc.), `"name"` (string). Entrada 3D, sortida 2D.
+13. `"GlobalAveragePooling1D"`: `"keepdims"` (bool, opc.), `"name"` (string). Entrada 3D, sortida 2D.
+14. `"LSTM"`: `"units"` (int), `"activation"`, `"recurrent_activation"`, `"return_sequences"` (bool), `"use_bias"` (bool, opc.), `"kernel_initializer"`, `"recurrent_initializer"`, `"bias_initializer"` (tots opc.), `"name"` (string). Entrada 3D.
+15. `"Flatten"`: `"name"` (string). Converteix entrada multi-dim a 2D.
+16. `"Add"`: `"input_source_feature_maps"` (llista de 2+ noms de mapes), `"name"` (string). Per sumes element-wise. Les formes de les entrades han de coincidir exactament.
+17. `"Multiply"`: `"input_source_feature_maps"` (llista de 2+ noms de mapes), `"name"` (string). Per productes element-wise. Les formes de les entrades han de coincidir exactament.
+18. `"LambdaSlice"`: `"slice_params": {"axis": int, "start": int/null, "end": int/null, "step": int/null}`, `"name"` (string). Permet fer slicing sobre un tensor. L'eix 0 és el batch.
+19. `"AttentionKeras"`: (Basada en `tf.keras.layers.Attention`)
+    *   `"input_source_feature_maps"`: Llista de 2 o 3 noms de mapes (per a `query`, `value`, `[key opcional]`). Les entrades han de ser 3D.
+    *   `"params"`: (dict opcional) amb `"use_causal_mask"` (bool, per al mètode `call`), `"dropout"` (float, per al constructor).
+    *   `"name"` (string).
+20. `"MultiHeadAttentionKeras"`: (Basada en `tf.keras.layers.MultiHeadAttention`)
+    *   `"input_source_feature_maps"`: Llista de 1 (self-attn: Q,V,K iguals), 2 (cross-attn: Q, V; K=V) o 3 (cross-attn: Q, V, K) noms de mapes. Les entrades han de ser 3D.
+    *   `"constructor_params"`: (dict) amb `"num_heads"` (int, obligatori), `"key_dim"` (int, obligatori), `"value_dim"` (int, opc.), `"dropout"` (float, opc.), `"use_bias"` (bool, opc.), `"kernel_initializer"`, `"bias_initializer"` (opc.).
+    *   `"call_params"`: (dict opcional) amb `"use_causal_mask"` (bool), `"return_attention_scores"` (bool, si true, els scores es guarden com `{name}_scores`), `"attention_mask"` (string, nom d'un mapa de features 3D o 2D per a la màscara).
+    *   `"name"` (string).
+
+**INICIALITZADORS (`*_initializer`):**
+Es poden especificar com:
+- Un string: `"glorot_uniform"`, `"he_normal"`, `"zeros"`, `"ones"`, etc.
+- Un diccionari: `{"type": "RandomNormal", "mean": 0.0, "stddev": 0.05, "seed": 42}`.
+
+**CONNEXIONS DE CAPES:**
+- Per defecte, les capes dins d'una branca (`"layers"`) es connecten linealment.
+- Per a capes que necessiten múltiples entrades (`Add`, `Multiply`, `AttentionKeras`, `MultiHeadAttentionKeras`), has d'especificar-les amb `"input_source_feature_maps"`.
+- Qualsevol capa pot prendre la seva entrada d'un *feature map* específic amb `"explicit_input_source_feature_map"`.
+
+**DOCUMENT DE REFERÈNCIA D'ARQUITECTURES (EXEMPLES JSON):**
+{{architecture_guide_content}}
+
+---
+### **CONTEXT DE L'EXPERIMENT**
+
+**FEATURES D'ENTRADA DISPONIBLES:**
+{{available_inputs_description}}
+
+**TARGETS DE SORTIDA DISPONIBLES:**
+{{available_outputs_description}}
+
+**REQUISIT CRÍTIC SOBRE LES SORTIDES DELS MODELS:**
+Els següents TARGETS són **OBLIGATORIS**. Cada model que generis HA D'INCLOURE un 'output_head' per a cadascun d'ells, utilitzant el `"maps_to_target_config_name"` correcte:
+- `"stop_loss_prediction"`
+- `"take_profit_prediction"`
+
+**ESTRUCTURA JSON ESPERADA PER A CADA NOU MODEL:**
+1.  `"model_id"`: "llm_generated_placeholder"
+2.  `"version"`, `"description"`, `"change_log"`, `"llm_reasoning"`, `"potential_next_variations"`
+3.  `"seed"`
+4.  `"architecture_definition"`: 
+    *   `"used_inputs"`: [...]
+    *   `"branches"`: [...]
+    *   `"merges"`: (Opcional) [...]
+    *   `"output_heads"`: [...]
+5.  `"training_config"`
+
+---
+### **ANÀLISI DE RESULTATS ANTERIORS: ESTUDIS DE CAS**
+
+A continuació es presenten els {{num_best_models_considered}} models de més èxit fins ara i un resum de l'evolució dels seus descendents. **Analitza aquests casos, aprèn dels èxits i, sobretot, dels errors per evitar repetir-los.**
+{{genealogy_case_studies}}
+
+---
+### **TASCA FINAL**
+
+Basant-te en TOTA la informació anterior, genera {{num_new_models}} noves propostes d'arquitectures.
+
+---
+### **CONSELLS IMPORTANTS PER EVITAR ERRORS DE CONSTRUCCIÓ (Presta Molta Atenció!)**
+
+1.  **DIMENSIONALITAT PER A CAPES SEQÜNCIALS (Conv1D, LSTM, Atenció):**
+    *   **Error Típic:** `ValueError: Input 0 ... expected ndim=3, found ndim=2.`
+    *   **Consell:** Aquestes capes **HAN DE REBRE** una entrada 3D: `(batch, timesteps, features)`. Si la teva entrada o mapa de features és 2D, **HAS D'UTILITZAR** una capa `"Reshape"` abans.
+
+2.  **ÚS CORRECTE DE CAPES D'ATENCIÓ:**
+    *   **REQUISIT D'ENTRADA 3D:** Totes les entrades a `AttentionKeras` i `MultiHeadAttentionKeras` han de ser 3D.
+    *   **ERROR FATAL A EVITAR:** **NO** apliquis atenció a la sortida de `GlobalAveragePooling1D`, `GlobalMaxPooling1D`, o `Flatten`. Fes-ho **ABANS** del pooling.
+
+3.  **COMPATIBILITAT DE FORMES PER A `Concatenate`:**
+    *   **Consell:** Els tensors han de tenir la mateixa forma excepte en l'eix de concatenació. Utilitza `Flatten` o Pooling Global per convertir 3D a 2D abans de concatenar si cal.
+
+4.  **COMPATIBILITAT DE FORMES PER A `Add` i `Multiply`:**
+    *   **Consell:** Els tensors han de tenir **EXACTAMENT** la mateixa forma.
+
+5.  **ENTRADA PER A CAPES `Dense`:**
+    *   **Consell:** Si la capa anterior retorna un tensor 3D o superior, utilitza `Flatten` o Pooling Global abans de la `Dense`.
+
+6.  **NOMS ÚNICS I REFERÈNCIES CORRECTES:**
+    *   **Consell:** Assegura't que tots els noms (`"name"`, `"input_layer_name"`, `"output_feature_map_name"`) són únics i que les referències a mapes són correctes.

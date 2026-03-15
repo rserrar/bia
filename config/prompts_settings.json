@@ -1,0 +1,4 @@
+{
+  "generate_new_prompt_file": "prompts/generate_new_models.txt",
+  "fix_error_prompt_file": "prompts/fix_model_error.txt"
+}

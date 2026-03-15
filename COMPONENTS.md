@@ -8,13 +8,14 @@ Responsabilitat:
 - Reprendre execució des de checkpoints
 - Publicar estat i resultats al Server API
 
-Submòduls recomanats:
+Submòduls a `src/` recomanats/implementats:
 
-- `bootstrap/`: arrencada, dependències, càrrega de codi
-- `engine/`: bucle principal d'evolució
-- `state/`: checkpoints i control de resum
-- `storage/`: Drive principal + fallback servidor
-- `reporting/`: events, mètriques i artefactes
+- `run_worker.py`: arrencada, dependències, càrrega de codi
+- `engine.py`: bucle principal d'evolució
+- `checkpoint_store.py`: persistència d'estat
+- `api_client.py`: comunicació amb el servidor API i fallback
+- `llm_client.py` / `v2_prompt_builder.py`: generació i reparació de propostes
+- `config.py`: configuració de l'entorn
 
 Entrades:
 
@@ -31,13 +32,13 @@ Sortides:
 
 ## 2) Server API
 
-Responsabilitat:
+S'ha implementat principalment sota `server-api/php/`:
 
-- Orquestrar runs/jobs
-- Emmagatzemar estat i metadades
+- Orquestrar runs/jobs (Emmagatzematge SQLite o JSON fallback)
+- Proveir interfície web per al monitoratge (`public/monitor.php`)
 - Exposar endpoints segurs per worker i frontend
 
-Endpoints mínims:
+Endpoints mínims implementats (`public/index.php`):
 
 - `POST /runs`
 - `POST /runs/{run_id}/heartbeat`

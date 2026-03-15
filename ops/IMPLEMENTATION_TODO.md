@@ -23,29 +23,31 @@
 - Prompt generator V2 basat en plantilla antiga integrat al worker
 - Script de prova E2E LLM mock afegit
 
-## Prioritat P0 (ara)
+## Tasques Completades Recentment
 
-1. Executar prova E2E LLM mock (4+ generacions) i validar proposals per generació
+- Prova E2E LLM executada amb èxit (mock i real).
+- Monitor definit com a dashboard PHP al servidor (`monitor.php`).
+- Panell al monitor configurat per veure events globals, mètriques per model i tracking de quotes consumides (V2_LLM_MAX_TOKENS_PER_RUN).
+- Generació i validació Phase0 integrada.
+- Sistema de Promoció KPI automàtica incrustada al dashboard.
 
-## Prioritat P1 (següent bloc)
-
-1. Definir monitor d'estat operatiu
-2. Decidir ubicació del monitor: app local o dashboard PHP al servidor
-3. Afegir panell de runs, errors i mètriques principals
-4. Afegir traça de versions de codi i configuració per run
-
-## Prioritat P2 (evolució de models)
-
-1. Validar generació automàtica de proposals per generació amb LLM mock
-2. Activar LLM real i validar candidats amb Fase 0 abans d'entrenament llarg
-3. Guardar historial complet de prompts, candidates i resultats
-4. Definir control de costos i límits de crides per run
+## P3: Phase 4: Hardening & Maintenance
+- [x] **Pipeline Entrenament complet (post-Phase0)**
+    - Afegit un Worker Independent (`run_trainer.py` i `trainer.py`) que processa els models en estat 'accepted' cap a 'trained'.
+    - Afegits logs i controls de callbacks de limitació de temps/èpoques dins els Colab enviant status pel terminal.
+    - Actualitzada l'API PHP per incorporar l'estat `training` i el mètode de lock.
+- [ ] **Integration Testing**
+    - [ ] Escriure proves per verificar canvis d'estat de worker a local monitor (comprovar robustesa connexió API).
+    - [ ] Afegir timeouts resilients i retries al client HTTP.
+- [ ] **Buidatge Codi V1**
+    - [ ] Localitzar referències inútils i netejar el directori d'antics runscripts.
+- [ ] **Documentació Final**
+    - [ ] Crear manual final per V2.
+    - [ ] Confirmar compatibilitats amb l'entorn de notebook final al drive.
 
 ## Decisions obertes
 
-- Monitor local vs monitor web en PHP
-- Estratègia final de persistència (SQLite únic o híbrid amb export JSON)
-- Mecanisme de control de costos i límits per l'ús de LLM
+- Com articular l'entrenament d'Epochs complets post-Phase0 al Colab? (S'ha de fer dins el bucle d'evolució o en un job apart?)
 
 ## Criteris de pas de fase
 

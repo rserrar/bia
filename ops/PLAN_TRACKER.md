@@ -5,18 +5,16 @@ Backlog detallat actual: `ops/IMPLEMENTATION_TODO.md`
 ## Estat general
 
 - Fase 0 Base de projecte: completada
-- Fase 1 MVP funcional: gairebé completada
-- Fase 2 Robustesa: en curs
-- Fase 3 Frontend local: en curs
-- Fase 4 Enduriment i manteniment: pendent
+- Fase 1 MVP funcional: completada
+- Fase 2 Robustesa: completada
+- Fase 3 Frontend web: completada (mitjançant `monitor.php`)
+- Fase 4 Enduriment i manteniment: en curs
 
-## Backlog immediat
-
-1. Activar backend `sqlite` al servidor i validar persistència
-2. Validar monitor web bàsic en servidor (`public/monitor.php`)
-3. Decidir monitor local o dashboard PHP com a opció principal
-4. Connectar pipeline de generació amb servei LLM real
-5. Afegir test d'integració run complet
+## Immediate Backlog / Next Actions
+1. **[FASE 4 INICIADA] Pipeline de Post-Train**: Creat `trainer.py` i rutes de l'API per l'entrenament final.
+2. [Testing] Completar proves E2E d'integració.
+3. [Manteniment] Desenvolupar script de _cleanup_ per netejar la DB d'experiments abortats i codi de V1 innecessari.
+4. [Xarxa] Refinar timeouts i lògica de reintent en l'API Client del Worker.
 
 ## Checkpoint operatiu
 
@@ -44,3 +42,6 @@ Backlog detallat actual: `ops/IMPLEMENTATION_TODO.md`
 - Comunicació LLM del worker connectada a `utils/llm_interface.py` (reutilització)
 - Generador de prompt V2 connectat a plantilla antiga (`prompts/generate_new_models.txt`)
 - Script E2E de prova LLM disponible (`run_llm_generation_trial.py`)
+- Lògica per KPIs i promoció establerta a la API (`ApiService.php`)
+- Monitor d'events globals i mètriques establert al frontend PHP.
+- Tracking de tokens consumits i event `llm_quota_reached` llestos.

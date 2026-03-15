@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import asdict, dataclass
 
@@ -23,6 +24,7 @@ class WorkerState:
     generation: int = 0
     stage: str = "init"
     status: str = "queued"
+    total_llm_tokens: int = 0
 
 
 class EvolutionWorkerEngine:
@@ -63,6 +65,7 @@ class EvolutionWorkerEngine:
             generation=int(data.get("generation", 0)),
             stage=data.get("stage", "init"),
             status=data.get("status", "queued"),
+            total_llm_tokens=int(data.get("total_llm_tokens", 0)),
         )
 
     def _save_state(self) -> None:
@@ -135,6 +138,7 @@ class EvolutionWorkerEngine:
         }
         try:
             self.last_llm_call_ts = time.time()
+            print("🤖 Fent petició al LLM per generar una nova proposta. Espera si us plau...")
             candidate = self.llm.generate_candidate(context)
             if not candidate:
                 return
@@ -145,6 +149,19 @@ class EvolutionWorkerEngine:
             llm_metadata = candidate.get("llm_metadata")
             llm_metadata_payload = llm_metadata if isinstance(llm_metadata, dict) else {}
             llm_metadata_payload["from_generation"] = generation
+            
+            raw_response = llm_metadata_payload.get("raw_response", {})
+            if isinstance(raw_response, dict):
+                usage = raw_response.get("usage", {})
+                if isinstance(usage, dict):
+                    tokens = int(usage.get("total_tokens", 0) or 0)
+                    if tokens > 0:
+                        self.state.total_llm_tokens += tokens
+                        llm_metadata_payload["accumulated_run_tokens"] = self.state.total_llm_tokens
+                        max_tokens_run = int(os.getenv("V2_LLM_MAX_TOKENS_PER_RUN", "500000"))
+                        if self.state.total_llm_tokens > max_tokens_run:
+                            self.api.add_event(run_id, "llm_quota_reached", f"Quota exhaurida: {self.state.total_llm_tokens} > {max_tokens_run}")
+
             created = self.api.create_model_proposal(
                 source_run_id=run_id,
                 base_model_id=base_model_id,

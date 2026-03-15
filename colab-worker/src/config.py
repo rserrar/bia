@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import os
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -98,14 +98,14 @@ def load_worker_config() -> WorkerConfig:
         llm_prompt_template_file=os.getenv("V2_LLM_PROMPT_TEMPLATE_FILE", "prompts/generate_new_models.txt"),
         llm_fix_error_prompt_file=os.getenv("V2_LLM_FIX_ERROR_PROMPT_FILE", "prompts/fix_model_error.txt"),
         llm_architecture_guide_file=os.getenv("V2_LLM_ARCHITECTURE_GUIDE_FILE", "prompts/instruccions.md"),
-        llm_experiment_config_file=os.getenv("V2_LLM_EXPERIMENT_CONFIG_FILE", "/content/b-ia/config_experiment.json"),
+        llm_experiment_config_file=os.getenv("V2_LLM_EXPERIMENT_CONFIG_FILE", "V2/configs/experiment_config.json"),
         llm_num_new_models=int(os.getenv("V2_LLM_NUM_NEW_MODELS", "1")),
         llm_num_reference_models=int(os.getenv("V2_LLM_NUM_REFERENCE_MODELS", "3")),
         llm_min_interval_seconds=int(os.getenv("V2_LLM_MIN_INTERVAL_SECONDS", "20")),
         llm_repair_on_validation_error=os.getenv("V2_LLM_REPAIR_ON_VALIDATION_ERROR", "true").lower() in {"1", "true", "yes"},
         verify_legacy_model_build=os.getenv("V2_VERIFY_LEGACY_MODEL_BUILD", "").lower() in {"1", "true", "yes"},
         legacy_build_check_strict=os.getenv("V2_LEGACY_BUILD_CHECK_STRICT", "").lower() in {"1", "true", "yes"},
-        legacy_model_json_path=os.getenv("V2_LEGACY_MODEL_JSON_PATH", "/content/b-ia/models/base/model_exemple_complex_v1.json"),
-        legacy_experiment_config_path=os.getenv("V2_LEGACY_EXPERIMENT_CONFIG_PATH", "/content/b-ia/config_experiment.json"),
-        legacy_builder_path=os.getenv("V2_LEGACY_BUILDER_PATH", "/content/b-ia/utils/model_builder.py"),
+        legacy_model_json_path=os.getenv("V2_LEGACY_MODEL_JSON_PATH", "V2/models/base/model_exemple_complex_v1.json"),
+        legacy_experiment_config_path=os.getenv("V2_LEGACY_EXPERIMENT_CONFIG_PATH", "V2/configs/experiment_config.json"),
+        legacy_builder_path=os.getenv("V2_LEGACY_BUILDER_PATH", "V2/shared/utils/model_builder.py"),
     )

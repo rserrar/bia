@@ -1,174 +1,32 @@
-# Guia de notebook Colab per a prova real
+# Guia de notebook Colab per a prova real (V2 runtime-ready)
 
 ## Objectiu
 
-Executar la V2 en Colab reutilitzant el codi existent del worker i el contracte API actual.
+Executar V2 a Colab amb comprovacions *fail-fast* perquè, si falta algun fitxer o configuració, el notebook falli de seguida amb un error clar.
 
-## Cèl·lula 1: Preparar entorn
+## Notebook recomanat
 
-```python
-!pip install -q requests tensorflow
-```
+Fes servir el notebook nou:
 
-## Cèl·lula 2: Muntar Drive i clonar/actualitzar codi
+- `V2/colab-worker/V2_runtime_ready_colab.ipynb`
 
-```python
-from google.colab import drive
-drive.mount('/content/drive')
-```
+Aquest fitxer ja està alineat amb rutes V2 (`V2/config`, `V2/prompts`, `V2/shared`, etc.).
 
-```python
-%cd /content
-!test -d b-ia && (cd b-ia && git pull) || git clone https://github.com/rserrar/bia.git b-ia
-%cd /content/b-ia/V2
-```
+## Flux resumit
 
-## Cèl·lula 3: Variables de run
+1. Muntar Drive i clonar/actualitzar repo.
+2. Instal·lar dependències Python.
+3. Definir variables d'entorn (API, checkpoint, LLM, paths V2).
+4. Verificar fitxers i estructura requerida.
+5. Verificar dataset i aplicar compatibilitat de noms CSV (si cal).
+6. Verificar connectivitat amb servidor (`probe_api_prefix` + `go_no_go_check`).
+7. Executar `run_phase0_model_validation.py`.
+8. Executar `run_llm_full_prompt_check.py` en mode sec.
+9. Executar worker (`run_worker.py`).
+10. Recuperar `run_id` i (opcional) executar compile-check de propostes.
 
-```python
-import os
-V2_API_BASE_URL = "https://<api-real>"
-V2_API_PATH_PREFIX = ""
-V2_API_TOKEN = "<token>"
-if "<api-real>" in V2_API_BASE_URL or "<token>" in V2_API_TOKEN:
-    raise RuntimeError("Configura V2_API_BASE_URL i V2_API_TOKEN")
-os.environ["V2_API_BASE_URL"] = V2_API_BASE_URL
-os.environ["V2_API_PATH_PREFIX"] = V2_API_PATH_PREFIX
-os.environ["V2_API_TOKEN"] = V2_API_TOKEN
-os.environ["V2_CODE_VERSION"] = "real-colab-v2"
-os.environ["V2_CHECKPOINT_PATH"] = "/content/drive/MyDrive/bia_v2/run_state.json"
-os.environ["V2_HEARTBEAT_INTERVAL_SECONDS"] = "30"
-os.environ["V2_MAX_GENERATIONS"] = "3"
-os.environ["V2_AUTO_PROCESS_PROPOSALS_PHASE0"] = "true"
-os.environ["V2_PROPOSALS_PHASE0_BATCH_SIZE"] = "20"
-os.environ["V2_LLM_ENABLED"] = "false"
-os.environ["V2_LLM_USE_LEGACY_INTERFACE"] = "true"
-os.environ["V2_LLM_PROVIDER"] = "mock"
-os.environ["V2_LLM_ENDPOINT"] = "https://api.openai.com/v1/chat/completions"
-os.environ["V2_LLM_API_KEY"] = ""
-os.environ["V2_LLM_MODEL"] = "gpt-5.4"
-os.environ["V2_LLM_CONFIG_FILE"] = "/content/b-ia/config/llm_settings.json"
-os.environ["V2_LLM_PROMPT_TEMPLATE_FILE"] = "prompts/generate_new_models.txt"
-os.environ["V2_LLM_ARCHITECTURE_GUIDE_FILE"] = "prompts/instruccions.md"
-os.environ["V2_LLM_EXPERIMENT_CONFIG_FILE"] = "/content/b-ia/config_experiment.json"
-os.environ["V2_LLM_NUM_NEW_MODELS"] = "1"
-os.environ["V2_LLM_NUM_REFERENCE_MODELS"] = "3"
-os.environ["V2_VERIFY_LEGACY_MODEL_BUILD"] = "true"
-os.environ["V2_LEGACY_BUILD_CHECK_STRICT"] = "false"
-os.environ["V2_LEGACY_MODEL_JSON_PATH"] = "/content/b-ia/models/base/model_exemple_complex_v1.json"
-os.environ["V2_LEGACY_EXPERIMENT_CONFIG_PATH"] = "/content/b-ia/config_experiment.json"
-os.environ["V2_LEGACY_BUILDER_PATH"] = "/content/b-ia/utils/model_builder.py"
-```
+## Notes importants
 
-## Cèl·lula 4: Go/No-Go previ
-
-```python
-!python ops/scripts/probe_api_prefix.py
-!python ops/scripts/go_no_go_check.py
-```
-
-## Cèl·lula 5: Validació Fase 0 de models
-
-```python
-!python ops/scripts/run_phase0_model_validation.py
-```
-
-Config per defecte:
-
-- `ops/configs/phase0_model_validation.json` (paths a `/content/b-ia`)
-
-## Cèl·lula 6: Executar worker
-
-```python
-!python colab-worker/src/run_worker.py
-```
-
-La comanda executa correctament el worker tant en execució directa com en mode paquet.
-
-## Cèl·lula 7: Verificacions post-run
-
-```python
-!python ops/scripts/check_legacy_model_compat.py
-!python ops/scripts/watchdog_retry.py
-```
-
-## Cèl·lula 8: Prova multi-generació curta
-
-```python
-import os
-os.environ["V2_TRIAL_MAX_GENERATIONS"] = "8"
-os.environ["V2_TRIAL_HEARTBEAT_SECONDS"] = "5"
-os.environ["V2_TRIAL_CODE_VERSION"] = "trial-multi-gen-8"
-os.environ["V2_TRIAL_VERIFY_LEGACY"] = "false"
-!python ops/scripts/run_multi_generation_trial.py
-```
-
-## Cèl·lula 9: Prova E2E de generació LLM (GPT real)
-
-```python
-import os
-os.environ["V2_LLM_PROVIDER"] = "openai"
-os.environ["V2_LLM_USE_LEGACY_INTERFACE"] = "true"
-os.environ["V2_LLM_TRIAL_MODEL"] = "gpt-5.4"
-os.environ["V2_LLM_TRIAL_ENDPOINT"] = "https://api.openai.com/v1/chat/completions"
-os.environ["V2_LLM_FIX_ERROR_PROMPT_FILE"] = "prompts/fix_model_error.txt"
-os.environ["V2_LLM_REPAIR_ON_VALIDATION_ERROR"] = "true"
-os.environ["V2_LLM_TRIAL_GENERATIONS"] = "4"
-os.environ["V2_LLM_MIN_INTERVAL_SECONDS"] = "35"
-os.environ["OPENAI_API_KEY"] = "<nova_clau>"
-if "<nova_clau>" in os.environ["OPENAI_API_KEY"]:
-    raise RuntimeError("Configura OPENAI_API_KEY amb una clau real abans de la prova GPT.")
-!cd /content/b-ia && git pull
-!python ops/scripts/run_llm_generation_trial.py
-```
-
-## Cèl·lula 10: Probe d'accés i límits OpenAI
-
-```python
-import os
-os.environ["OPENAI_API_KEY"] = "<nova_clau>"
-os.environ["V2_OPENAI_PROBE_MODELS"] = "gpt-5.4,o4-mini,gpt-5.3-codex"
-!python ops/scripts/probe_openai_models.py
-```
-
-## Cèl·lula 11: Prova de prompt complet + proposta real
-
-```python
-import os
-os.environ["V2_LLM_ENABLED"] = "true"
-os.environ["V2_LLM_PROVIDER"] = "openai"
-os.environ["V2_LLM_USE_LEGACY_INTERFACE"] = "true"
-os.environ["V2_LLM_MODEL"] = "gpt-5.4"
-os.environ["V2_LLM_ENDPOINT"] = "https://api.openai.com/v1/chat/completions"
-os.environ["V2_LLM_MIN_INTERVAL_SECONDS"] = "35"
-os.environ["OPENAI_API_KEY"] = "<nova_clau>"
-os.environ["V2_PROMPT_REFERENCE_MODEL_PATH"] = "/content/b-ia/models/base/model_exemple_complex_v1.json"
-os.environ["V2_PROMPT_SEND_TO_LLM"] = "false"
-os.environ["V2_PROMPT_PUSH_TO_API"] = "false"
-!python ops/scripts/run_llm_full_prompt_check.py
-```
-
-## Cèl·lula 12: Compilar propostes generades del run
-
-```python
-import os
-os.environ["V2_TARGET_RUN_ID"] = "<run_id_del_trial>"
-!python ops/scripts/run_generated_proposals_compile_check.py
-```
-
-## Cèl·lula 13: Activar reparació automàtica i repetir trial
-
-```python
-import os
-os.environ["V2_LLM_FIX_ERROR_PROMPT_FILE"] = "prompts/fix_model_error.txt"
-os.environ["V2_LLM_REPAIR_ON_VALIDATION_ERROR"] = "true"
-os.environ["V2_LLM_TRIAL_GENERATIONS"] = "4"
-!python ops/scripts/run_llm_generation_trial.py
-```
-
-## Notes
-
-- El notebook és principalment codi d'orquestració.
-- La lògica de negoci reutilitza els mòduls de `colab-worker/src`.
-- Si l'API respon 404 a `/runs`, deixa `V2_API_PATH_PREFIX=""` o posa `/public/index.php`.
-- Per usar LLM real, activa `V2_LLM_ENABLED=true` i configura `OPENAI_API_KEY` o `V2_LLM_API_KEY`.
+- Executa des de `/content/b-ia` (no des de `/content/b-ia/V2`) per mantenir consistència amb `data_dir: V2/data/min`.
+- Si el servidor requereix token, posa `V2_API_TOKEN` real abans de córrer les cèl·lules de connectivitat.
+- El notebook no activa enviament real a LLM per defecte (`V2_PROMPT_SEND_TO_LLM=false`).

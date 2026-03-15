@@ -91,8 +91,8 @@ def main() -> int:
     if run_id == "":
         raise RuntimeError("V2_TARGET_RUN_ID és obligatori")
 
-    experiment_config_path = os.getenv("V2_LEGACY_EXPERIMENT_CONFIG_PATH", "/content/b-ia/config_experiment.json")
-    legacy_builder_path = os.getenv("V2_LEGACY_BUILDER_PATH", "/content/b-ia/utils/model_builder.py")
+    experiment_config_path = os.getenv("V2_LEGACY_EXPERIMENT_CONFIG_PATH", "V2/configs/experiment_config.json")
+    legacy_builder_path = os.getenv("V2_LEGACY_BUILDER_PATH", "V2/shared/utils/model_builder.py")
     proposals_payload = _request_json("GET", api_base_url, "/model-proposals?limit=500", api_token)
     proposals = [
         p for p in proposals_payload.get("model_proposals", [])

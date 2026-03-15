@@ -1,0 +1,129 @@
+La teva tasca és analitzar i corregir un error en una definició de model Keras (en format JSON) que ha fallat durant la seva construcció o validació. Has de retornar la definició del model corregit **ÚNICAMENT en format JSON**, sense cap text addicional fora de l'objecte JSON.
+
+---
+
+**CONTEXT DEL PROBLEMA:**
+
+Definició del model amb error (JSON):
+{{buggy_model_json}}
+
+Missatge d'error i traceback obtingut:
+{{error_traceback}}
+
+(Opcional) Aquí tens un exemple d'un model JSON similar que **SÍ** funciona correctament (pot estar buit si no hi ha cap exemple bo disponible, o ser un exemple específic seleccionat per a aquest error):
+{{working_model_example_json}}
+
+(Opcional) Descripció de les features d'entrada disponibles per als models (per si necessites ajustar capes d'entrada):
+{{available_inputs_description}}
+
+(Opcional) Descripció dels targets de sortida disponibles per als models (per si necessites ajustar capes de sortida):
+{{available_outputs_description}}
+
+(Opcional) Document de referència d'arquitectures (pot contenir exemples JSON i explicacions de patrons):
+{{architecture_guide_content}}
+
+---
+
+**PROCÉS DE PENSAMENT SUGGERIT PER A LA CORRECCIÓ:**
+
+1.  **COMPRENSIÓ DE L'ERROR:**
+    *   Llegeix **ATENTAMENT** el `{{buggy_model_json}}`, el `{{error_traceback}}` i el missatge d'error.
+    *   Identifica la capa o secció del JSON que causa el problema.
+    *   Consulta els "CONSELLS DETALLATS PER A LA CORRECCIÓ" més avall per trobar possibles causes i solucions.
+    *   Si es proporciona un `{{working_model_example_json}}`, compara'l amb el model erroni per trobar diferències rellevants.
+
+2.  **DISSENY DE LA SOLUCIÓ:**
+    *   Formula una hipòtesi sobre la causa exacta de l'error.
+    *   Planifica el canvi mínim necessari al JSON per corregir l'error, intentant preservar la intenció original de l'arquitectura tant com sigui possible.
+    *   Consulta el catàleg de capes permeses i els exemples a `{{architecture_guide_content}}` si necessites modificar o reemplaçar capes.
+    *   **Especial Atenció a `used_inputs`**: Si l'error està relacionat amb les entrades, recorda que `used_inputs` ha de ser una LLISTA DE DICCIONARIS.
+
+3.  **MODIFICACIÓ DEL JSON:**
+    *   Aplica els canvis directament a una còpia del `{{buggy_model_json}}`.
+    *   Verifica els noms de les capes, les referències als mapes de features, i especialment les formes (shapes) dels tensors si l'error és de dimensionalitat.
+    *   Assegura't que el JSON resultant és sintàcticament correcte.
+
+4.  **REVISIÓ FINAL DE LA CORRECCIÓ:**
+    *   Comprova que la correcció aborda directament l'error reportat.
+    *   Verifica que no s'han introduït nous errors.
+    *   Assegura't que les sortides obligatòries encara hi són i estan ben definides.
+    *   Si creus que el model no es pot arreglar fàcilment o la correcció és massa complexa, retorna un objecte JSON buit: `{}`.
+    *   La sortida final ha de ser NOMÉS EL JSON CORREGIT.
+
+---
+
+### CATÀLEG DE CAPES PERMESES I ELS SEUS PARÀMETRES JSON PRINCIPALS
+(Aquesta secció és idèntica a la del prompt de generació, es manté per completitud)
+- **Input:** (Definida a used_inputs) `shape` (llista d'enters), `name` (string).
+- **Dense:** `units` (int), `activation` (string), `use_bias` (bool, opc.), `kernel_initializer` (string/dict, opc.), `bias_initializer` (string/dict, opc.), `name` (string).
+- **Activation:** `activation_function` (string, ex: `"relu"`, `"swish"`), `name` (string).
+- **Dropout:** `rate` (float), `name` (string).
+- **SpatialDropout1D:** `rate` (float), `name` (string). Per a entrades 3D, elimina canals sencers.
+- **BatchNormalization:** Paràmetres opcionals de Keras (ex: `momentum`, `epsilon`), `name` (string).
+- **LayerNormalization:** Paràmetres opcionals de Keras (ex: `epsilon`), `name` (string).
+- **Reshape:** `target_shape` (llista d'enters, ex: `[100, 1]`), `name` (string). **CRUCIAL** per adaptar dimensions per a Conv1D/LSTM/Atenció.
+- **Conv1D:** `filters` (int), `kernel_size` (int), `activation` (string), `padding` (string), `strides` (int, opc.), `dilation_rate` (int, opc.), `use_bias` (bool, opc.), `kernel_initializer` (string/dict, opc.), `bias_initializer` (string/dict, opc.), `name` (string). Entrada 3D.
+- **SeparableConv1D:** Similar a Conv1D, més `depth_multiplier` (int, opc.), `depthwise_initializer` (string/dict, opc.), `pointwise_initializer` (string/dict, opc.). Entrada 3D.
+- **MaxPooling1D:** `pool_size` (int), `padding` (string), `strides` (int, opc.), `name` (string). Entrada 3D.
+- **GlobalMaxPooling1D:** `keepdims` (bool, opc.), `name` (string). Entrada 3D, sortida 2D.
+- **GlobalAveragePooling1D:** `keepdims` (bool, opc.), `name` (string). Entrada 3D, sortida 2D.
+- **LSTM:** `units` (int), `activation`, `recurrent_activation`, `return_sequences` (bool), `use_bias` (bool, opc.), `kernel_initializer`, `recurrent_initializer`, `bias_initializer` (tots opc.), `name` (string). Entrada 3D.
+- **Flatten:** `name` (string). Converteix entrada multi-dim a 2D.
+- **Add:** `input_source_feature_maps` (llista de 2+ noms de mapes), `name` (string). Per sumes element-wise. Les formes de les entrades han de coincidir exactament.
+- **Multiply:** `input_source_feature_maps` (llista de 2+ noms de mapes), `name` (string). Per productes element-wise. Les formes de les entrades han de coincidir exactament.
+- **LambdaSlice:** `slice_params`: `{ "axis": int, "start": int/null, "end": int/null, "step": int/null }`, `name` (string). Permet fer slicing sobre un tensor. L'eix 0 és el batch.
+- **AttentionKeras:** (Basada en `tf.keras.layers.Attention`)
+    - `input_source_feature_maps`: Llista de 2 o 3 noms de mapes (per a query, value, [key opcional]). Les entrades han de ser 3D.
+    - `params`: (dict opcional) amb `use_causal_mask` (bool, per al mètode call), `dropout` (float, per al constructor).
+    - `name` (string).
+- **MultiHeadAttentionKeras:** (Basada en `tf.keras.layers.MultiHeadAttention`)
+    - `input_source_feature_maps`: Llista de 1 (self-attn: Q,V,K iguals), 2 (cross-attn: Q, V; K=V) o 3 (cross-attn: Q, V, K) noms de mapes. Les entrades han de ser 3D.
+    - `constructor_params`: (dict) amb `num_heads` (int, obligatori), `key_dim` (int, obligatori), `value_dim` (int, opc.), `dropout` (float, opc.), `use_bias` (bool, opc.), `kernel_initializer`, `bias_initializer` (opc.).
+    - `call_params`: (dict opcional) amb `use_causal_mask` (bool), `return_attention_scores` (bool, si true, els scores es guarden com {name}_scores), `attention_mask` (string, nom d'un mapa de features 3D o 2D per a la màscara).
+    - `name` (string).
+
+**INICIALITZADORS (\*_initializer):**
+(Idèntic al prompt de generació)
+
+---
+
+### INSTRUCCIONS DETALLADES PER A LA CORRECCIÓ (CONSELLS)
+
+Analitza el missatge d'error i el traceback amb cura. A continuació, es detallen errors comuns i les seves solucions més probables. Intenta aplicar la solució més adient mantenint l'estructura i la intenció del model original tant com sigui possible.
+
+#### Error: `TypeError: string indices must be integers` (sovint relacionat amb `used_inputs`)
+- **Símptoma:** El traceback apunta a una línia on s'accedeix a `input_conf["alguna_clau"]` i `input_conf` és un string.
+- **Causa:** La secció `"used_inputs"` del JSON probablement conté strings en lloc de diccionaris.
+- **Solució:** Assegura't que cada element de la llista `"used_inputs"` és un DICCIONARI amb les claus `"input_layer_name"`, `"source_feature_name"`, i `"shape"`. Consulta l'exemple de `used_inputs` correcte a `{{architecture_guide_content}}`.
+
+#### Error: "Tipus de capa X no suportat"
+(Idèntic al prompt de generació)
+
+#### Error: Incompatibilitat de dimensions per a capes seqüencials (Conv1D, LSTM, AttentionKeras, MultiHeadAttentionKeras)
+(Idèntic al prompt de generació)
+
+#### Error: Incompatibilitat de formes en Concatenate (dins d'un merge)
+(Idèntic al prompt de generació)
+
+#### Error: Incompatibilitat de formes en Add o Multiply
+(Idèntic al prompt de generació)
+
+#### Error: Entrada incorrecta per a capa Dense
+(Idèntic al prompt de generació)
+
+#### Error: Problemes dimensionals o d'ús amb AttentionKeras o MultiHeadAttentionKeras
+(Idèntic al prompt de generació)
+
+---
+
+## TASCA
+
+Correeix al model JSON erroni per solucionar el problema indicat pel missatge d'error i el traceback. Intenta mantenir l'arquitectura i la intenció del model original tan similars com sigui possible, aplicant la solució més directa i lògica basada en els consells anteriors. Modifica només el necessari.
+
+---
+
+## SORTIDA
+
+Retorna la definició **COMPLETA** del model corregit en format JSON. Si, després d'analitzar l'error, creus que el model no es pot arreglar fàcilment amb les capes permeses, l'error és massa ambigu, o la correcció requeriria canvis arquitectònics molt profunds que s'allunyen de la intenció original, retorna un objecte JSON buit: `{}`.
+
+No incloguis cap text explicatiu, només el JSON.

@@ -9,15 +9,19 @@ V2/
   ROADMAP.md
 
   colab-worker/
-    notebook/
     src/
     configs/
     checkpoints/
+    V2_real_run_notebook.ipynb
+    COLAB_NOTEBOOK_PLAN.md
 
   server-api/
-    src/
-    migrations/
-    configs/
+    php/
+      configs/
+      public/
+      src/
+      state/
+    src/ (legacy/proves python)
 
   local-frontend/
     src/

@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace V2ServerApi;
 
 use RuntimeException;
+use InvalidArgumentException;
 
 final class ApiService
 {
     private const VALID_STATUSES = ['queued', 'running', 'retrying', 'completed', 'failed', 'cancelled'];
-    private const VALID_PROPOSAL_STATUSES = ['draft', 'queued_phase0', 'validated_phase0', 'accepted', 'rejected'];
+    private const VALID_ARTIFACT_STORAGES = ['drive', 'cloud', 'local'];
+    private const VALID_PROPOSAL_STATUSES = ['draft', 'queued_phase0', 'validated_phase0', 'accepted', 'rejected', 'training', 'trained'];
 
     private $store;
 
@@ -135,6 +137,42 @@ final class ApiService
             $runs = array_slice($runs, 0, $limit);
         }
         return $runs;
+    }
+
+    public function listEvents(int $limit = 200): array
+    {
+        $state = $this->store->readAll();
+        $events = array_values(is_array($state['events'] ?? null) ? $state['events'] : []);
+        usort(
+            $events,
+            static function (array $a, array $b): int {
+                $aTs = strtotime((string) ($a['timestamp'] ?? '')) ?: 0;
+                $bTs = strtotime((string) ($b['timestamp'] ?? '')) ?: 0;
+                return $bTs <=> $aTs; // Descending
+            }
+        );
+        if ($limit > 0 && count($events) > $limit) {
+            $events = array_slice($events, 0, $limit);
+        }
+        return $events;
+    }
+
+    public function listMetrics(int $limit = 200): array
+    {
+        $state = $this->store->readAll();
+        $metrics = array_values(is_array($state['metrics'] ?? null) ? $state['metrics'] : []);
+        usort(
+            $metrics,
+            static function (array $a, array $b): int {
+                $aTs = strtotime((string) ($a['timestamp'] ?? '')) ?: 0;
+                $bTs = strtotime((string) ($b['timestamp'] ?? '')) ?: 0;
+                return $bTs <=> $aTs; // Descending
+            }
+        );
+        if ($limit > 0 && count($metrics) > $limit) {
+            $metrics = array_slice($metrics, 0, $limit);
+        }
+        return $metrics;
     }
 
     public function getSummary(string $runId): array
@@ -286,6 +324,63 @@ final class ApiService
         ];
     }
 
+    public function evaluateModelProposalsKpis(float $lossThreshold = 0.5): array
+    {
+        $state = $this->store->readAll();
+        $proposals = $this->listModelProposals(1000);
+        $metrics = is_array($state['metrics'] ?? null) ? $state['metrics'] : [];
+        $metricsByModel = [];
+        foreach ($metrics as $metric) {
+            $metricsByModel[(string) ($metric['model_id'] ?? '')] = $metric['metrics'] ?? [];
+        }
+
+        $evaluated = [];
+        foreach ($proposals as $proposal) {
+            if ((string) ($proposal['status'] ?? '') !== 'validated_phase0') {
+                continue;
+            }
+            $proposalId = (string) ($proposal['proposal_id'] ?? '');
+            if ($proposalId === '') {
+                continue;
+            }
+            $modelMetrics = $metricsByModel[$proposalId] ?? null;
+            if ($modelMetrics === null) {
+                continue; // Wait for metrics
+            }
+            $valLoss = (float) ($modelMetrics['val_loss_total'] ?? 999.0);
+            
+            $llmMetadata = is_array($proposal['llm_metadata'] ?? null) ? $proposal['llm_metadata'] : [];
+            $llmMetadata['kpi_evaluation'] = [
+                'val_loss_total' => $valLoss,
+                'threshold' => $lossThreshold,
+                'evaluated_at' => $this->nowIso(),
+            ];
+            
+            if ($valLoss <= $lossThreshold) {
+                $proposal['status'] = 'accepted';
+                $llmMetadata['kpi_result'] = 'promoted';
+            } else {
+                $proposal['status'] = 'rejected';
+                $llmMetadata['kpi_result'] = 'rejected_by_loss';
+            }
+            
+            $proposal['llm_metadata'] = $llmMetadata;
+            $proposal['updated_at'] = $this->nowIso();
+            $this->store->replaceModelProposal($proposalId, $proposal);
+            
+            $evaluated[] = [
+                'proposal_id' => $proposalId,
+                'status' => $proposal['status'],
+                'val_loss_total' => $valLoss,
+            ];
+        }
+
+        return [
+            'evaluated_count' => count($evaluated),
+            'evaluated' => $evaluated,
+        ];
+    }
+
     public function markStaleRunsRetrying(int $staleAfterSeconds): array
     {
         if ($staleAfterSeconds < 0) {
@@ -364,6 +459,76 @@ final class ApiService
         if (!in_array($status, self::VALID_PROPOSAL_STATUSES, true)) {
             throw new RuntimeException('invalid proposal status');
         }
+    }
+
+    public function lockAcceptedProposalForTraining(string $trainerId): array|null
+    {
+        $state = $this->store->readAll();
+        $proposals = is_array($state['model_proposals'] ?? null) ? $state['model_proposals'] : [];
+        $candidates = array_filter(
+            $proposals,
+            static function (array $proposal): bool {
+                return ((string) ($proposal['status'] ?? '')) === 'accepted';
+            }
+        );
+
+        if (count($candidates) === 0) {
+            return null; // Cap a punt d'entrenar
+        }
+
+        // Ordenar del més antic que està accepted
+        usort(
+            $candidates,
+            static function (array $a, array $b): int {
+                $aTs = strtotime((string) ($a['updated_at'] ?? '')) ?: 0;
+                $bTs = strtotime((string) ($b['updated_at'] ?? '')) ?: 0;
+                return $aTs <=> $bTs;
+            }
+        );
+
+        $selected = $candidates[0];
+        $selected['status'] = 'training';
+        $selected['updated_at'] = $this->nowIso();
+        
+        $llmMetadata = is_array($selected['llm_metadata'] ?? null) ? $selected['llm_metadata'] : [];
+        $llmMetadata['training_locked_by'] = $trainerId;
+        $llmMetadata['training_started_at'] = $selected['updated_at'];
+        $selected['llm_metadata'] = $llmMetadata;
+
+        $this->store->replaceModelProposal((string) ($selected['proposal_id'] ?? ''), $selected);
+        return $selected;
+    }
+
+    public function updateProposalStatus(string $proposalId, string $status, array $metadataUpdates = []): array
+    {
+        if (!in_array($status, self::VALID_PROPOSAL_STATUSES, true)) {
+            throw new InvalidArgumentException("Invalid proposal status: {$status}");
+        }
+
+        $state = $this->store->readAll();
+        $proposals = is_array($state['model_proposals'] ?? null) ? $state['model_proposals'] : [];
+        $found = null;
+        foreach ($proposals as $proposal) {
+            if ((string) ($proposal['proposal_id'] ?? '') === $proposalId) {
+                $found = $proposal;
+                break;
+            }
+        }
+        
+        if ($found === null) {
+            throw new RuntimeException("Proposal not found: {$proposalId}");
+        }
+        
+        $found['status'] = $status;
+        $found['updated_at'] = $this->nowIso();
+        
+        if (!empty($metadataUpdates)) {
+            $currentMetadata = is_array($found['llm_metadata'] ?? null) ? $found['llm_metadata'] : [];
+            $found['llm_metadata'] = array_merge($currentMetadata, $metadataUpdates);
+        }
+        
+        $this->store->replaceModelProposal($proposalId, $found);
+        return $found;
     }
 
     private function autoValidateProposalForPhase0(array $proposal): array

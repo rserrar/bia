@@ -1,0 +1,116 @@
+{
+  "model_id": "model_exemple_complex_v1",
+  "version": "1.0.0",
+  "description": "Model d'exemple complex amb branques CNN, Self-Attention (MHA), processament de dades extra, i fusió per a prediccions multitasca.",
+  "change_log": [
+    "Versió inicial: Model complex de demostració."
+  ],
+  "llm_reasoning": "Aquest model serveix com a exemple de com combinar diferents tipus de processament (convolucional, atenció, dens) per a diferents tipus d'entrades i fusionar-les. L'objectiu és mostrar una estructura avançada i ben formada.",
+  "potential_next_variations": [
+    "Experimentar amb cross-attention entre la branca CNN i la branca de self-attention.",
+    "Afegir més profunditat o diferents mides de kernel/caps d'atenció."
+  ],
+  "seed": 123,
+  "architecture_definition": {
+    "used_inputs": [
+      {
+        "input_layer_name": "input_prices_800",
+        "source_feature_name": "prices_hist_full_800",
+        "shape": [800]
+      },
+      {
+        "input_layer_name": "input_extra",
+        "source_feature_name": "extra_data_details",
+        "shape": [9]
+      }
+    ],
+    "branches": [
+      {
+        "name": "cnn_processing_branch",
+        "input_source_layer": "input_prices_800",
+        "layers": [
+          {"type": "Reshape", "name": "reshape_prices_for_cnn", "target_shape": [800, 1]},
+          {"type": "Conv1D", "name": "cnn1", "filters": 32, "kernel_size": 7, "padding": "causal", "activation": "relu", "kernel_initializer": "he_normal"},
+          {"type": "MaxPooling1D", "name": "pool1", "pool_size": 2},
+          {"type": "LayerNormalization", "name": "ln1_cnn"},
+          {"type": "Conv1D", "name": "cnn2", "filters": 64, "kernel_size": 5, "padding": "causal", "activation": "relu", "strides": 2, "kernel_initializer": "he_normal"},
+          {"type": "GlobalAveragePooling1D", "name": "gap_cnn"}
+        ],
+        "output_feature_map_name": "cnn_branch_features"
+      },
+      {
+        "name": "mha_processing_branch",
+        "input_source_layer": "input_prices_800",
+        "layers": [
+          {"type": "Reshape", "name": "reshape_prices_for_mha", "target_shape": [800, 1]},
+          {"type": "Conv1D", "name": "mha_input_projection", "filters": 32, "kernel_size": 1, "activation": "relu"},
+          {"type": "MultiHeadAttentionKeras", "name": "mha_self_prices",
+            "input_source_feature_maps": ["mha_input_projection"],
+            "constructor_params": {"num_heads": 4, "key_dim": 8, "dropout": 0.1, "kernel_initializer": "glorot_uniform"},
+            "call_params": {"use_causal_mask": false}
+          },
+          {"type": "LayerNormalization", "name": "ln_after_mha"},
+          {"type": "GlobalAveragePooling1D", "name": "gap_mha"}
+        ],
+        "output_feature_map_name": "mha_branch_features"
+      },
+      {
+        "name": "extra_data_processing_branch",
+        "input_source_layer": "input_extra",
+        "layers": [
+          {"type": "Dense", "name": "dense_extra1", "units": 32, "activation": "elu", "kernel_initializer": "he_normal"},
+          {"type": "Dense", "name": "dense_extra2", "units": 16, "activation": "elu", "kernel_initializer": "he_normal"}
+        ],
+        "output_feature_map_name": "extra_data_features"
+      }
+    ],
+    "merges": [
+      {
+        "name": "final_feature_fusion",
+        "source_feature_maps": ["cnn_branch_features", "mha_branch_features", "extra_data_features"],
+        "type": "concatenate",
+        "layers_after_merge": [
+          {"type": "Dense", "name": "fused_dense1", "units": 128, "activation": "relu", "kernel_initializer": "glorot_uniform"},
+          {"type": "Dropout", "name": "fused_dropout", "rate": 0.3},
+          {"type": "Dense", "name": "fused_dense2", "units": 64, "activation": "relu", "kernel_initializer": "glorot_uniform"}
+        ],
+        "output_feature_map_name": "final_merged_representation"
+      }
+    ],
+    "output_heads": [
+      {
+        "output_layer_name": "output_stop_loss",
+        "maps_to_target_config_name": "stop_loss_prediction",
+        "source_feature_map": "final_merged_representation",
+        "units": 1,
+        "activation": "linear"
+      },
+      {
+        "output_layer_name": "output_take_profit",
+        "maps_to_target_config_name": "take_profit_prediction",
+        "source_feature_map": "final_merged_representation",
+        "units": 1,
+        "activation": "linear"
+      },
+      {
+        "output_layer_name": "output_price_reconstruction_aux",
+        "maps_to_target_config_name": "reconstruct_prices_last_100_target",
+        "source_feature_map": "final_merged_representation",
+        "units": 100,
+        "activation": "linear"
+      }
+    ]
+  },
+  "training_config": {
+    "compile": {
+      "optimizer": {"type": "Adam", "learning_rate": 0.0005, "clipnorm": 1.0},
+      "dynamic_loss_config_source": "output_targets_config",
+      "loss_weights": {
+        "output_stop_loss": 1.0,
+        "output_take_profit": 1.0,
+        "output_price_reconstruction_aux": 0.2
+      }
+    }
+  }
+}
+

@@ -1,0 +1,7 @@
+{
+  "llm_provider": "openai",
+  "openai_api_key_env_var": "OPENAI_API_KEY",
+  "openai_model_name": "gpt-5.4",
+  "temperature": 0.5,
+  "max_tokens": 15000
+}

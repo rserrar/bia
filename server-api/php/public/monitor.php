@@ -159,6 +159,11 @@ try {
         }
         redirectToMonitorHome();
     }
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && (string) ($_POST['action'] ?? '') === 'evaluate_kpis') {
+        $threshold = is_numeric($_POST['threshold'] ?? null) ? (float) $_POST['threshold'] : 0.5;
+        $_SESSION['eval_result'] = $service->evaluateModelProposalsKpis($threshold);
+        redirectToMonitorHome();
+    }
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && (string) ($_POST['action'] ?? '') === 'reset_all_data') {
         $confirm = is_string($_POST['confirm'] ?? null) ? (string) $_POST['confirm'] : '';
         if ($confirm === 'RESET') {
@@ -182,6 +187,8 @@ try {
     }
     $runs = $service->listRuns(100);
     $proposals = $service->listModelProposals(100);
+    $recentEvents = $service->listEvents(50);
+    $recentMetrics = $service->listMetrics(50);
 } catch (Throwable $error) {
     http_response_code(500);
     header('Content-Type: text/plain; charset=utf-8');
@@ -222,9 +229,17 @@ try {
 </head>
 <body>
     <h1>V2 Monitor</h1>
-    <?php $resetResult = is_array($_SESSION['reset_result'] ?? null) ? $_SESSION['reset_result'] : null; unset($_SESSION['reset_result']); ?>
+    <?php 
+        $resetResult = is_array($_SESSION['reset_result'] ?? null) ? $_SESSION['reset_result'] : null; unset($_SESSION['reset_result']); 
+        $evalResult = is_array($_SESSION['eval_result'] ?? null) ? $_SESSION['eval_result'] : null; unset($_SESSION['eval_result']); 
+    ?>
     <div class="meta">Actualització automàtica cada 15s · Runs: <?php echo count($runs); ?> · <a href="./monitor.php?logout=1">Sortir</a></div>
     <div class="toolbar">
+        <form method="post" action="./monitor.php">
+            <input type="hidden" name="action" value="evaluate_kpis">
+            <input type="number" name="threshold" value="0.5" step="0.01" style="width: 70px;">
+            <button type="submit">Avaluar KPIs (promoure models)</button>
+        </form>
         <form method="post" action="./monitor.php">
             <input type="hidden" name="action" value="reset_all_data">
             <input type="hidden" name="confirm" value="RESET">
@@ -232,6 +247,9 @@ try {
         </form>
         <?php if ($resetResult !== null): ?>
             <span class="notice">Reset fet · Runs: <?php echo (int) ($resetResult['deleted']['runs'] ?? 0); ?> · Events: <?php echo (int) ($resetResult['deleted']['events'] ?? 0); ?> · Metrics: <?php echo (int) ($resetResult['deleted']['metrics'] ?? 0); ?> · Artifacts: <?php echo (int) ($resetResult['deleted']['artifacts'] ?? 0); ?> · Proposals: <?php echo (int) ($resetResult['deleted']['model_proposals'] ?? 0); ?></span>
+        <?php endif; ?>
+        <?php if ($evalResult !== null): ?>
+            <span class="notice">Models avaluats (KPIs): <?php echo (int) ($evalResult['evaluated_count'] ?? 0); ?></span>
         <?php endif; ?>
     </div>
     <table>
@@ -314,6 +332,70 @@ try {
                             <input type="hidden" name="proposal_id" value="<?php echo $proposalIdEscaped; ?>">
                             <button type="submit">Enviar a phase0</button>
                         </form>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+        </tbody>
+    </table>
+    
+    <h2>Events Recents</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Timestamp</th>
+                <th>Run ID</th>
+                <th>Tipus</th>
+                <th>Nivell</th>
+                <th>Etiqueta</th>
+                <th>Detalls</th>
+            </tr>
+        </thead>
+        <tbody>
+            <?php foreach ($recentEvents as $event): ?>
+                <tr>
+                    <td><?php echo htmlspecialchars((string) ($event['timestamp'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ($event['run_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ($event['event_type'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ($event['level'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ($event['label'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td>
+                        <details>
+                            <summary>Veure JSON</summary>
+                            <pre style="font-size: 11px; margin: 0; background: #1e293b; padding: 4px; overflow-x: auto;">
+<?php echo htmlspecialchars(json_encode($event['details'] ?? [], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT), ENT_QUOTES, 'UTF-8'); ?>
+                            </pre>
+                        </details>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+        </tbody>
+    </table>
+
+    <h2>Mètriques Recents</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Timestamp</th>
+                <th>Run ID</th>
+                <th>Model ID</th>
+                <th>Generació</th>
+                <th>Mètriques</th>
+            </tr>
+        </thead>
+        <tbody>
+            <?php foreach ($recentMetrics as $metric): ?>
+                <tr>
+                    <td><?php echo htmlspecialchars((string) ($metric['timestamp'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ($metric['run_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ($metric['model_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo (int) ($metric['generation'] ?? 0); ?></td>
+                    <td>
+                        <details>
+                            <summary>Veure JSON</summary>
+                            <pre style="font-size: 11px; margin: 0; background: #1e293b; padding: 4px; overflow-x: auto;">
+<?php echo htmlspecialchars(json_encode($metric['metrics'] ?? [], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT), ENT_QUOTES, 'UTF-8'); ?>
+                            </pre>
+                        </details>
                     </td>
                 </tr>
             <?php endforeach; ?>

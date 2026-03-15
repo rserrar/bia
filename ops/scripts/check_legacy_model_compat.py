@@ -12,9 +12,9 @@ def _repo_root() -> Path:
 
 def main() -> int:
     repo = _repo_root()
-    model_json_path = os.getenv("V2_LEGACY_MODEL_JSON_PATH", str(repo / ".." / "models" / "base" / "model_exemple_complex_v1.json"))
-    experiment_config_path = os.getenv("V2_LEGACY_EXPERIMENT_CONFIG_PATH", str(repo / ".." / "config_experiment.json"))
-    legacy_builder_path = os.getenv("V2_LEGACY_BUILDER_PATH", str(repo / ".." / "utils" / "model_builder.py"))
+    model_json_path = os.getenv("V2_LEGACY_MODEL_JSON_PATH", str(repo / "models" / "base" / "model_exemple_complex_v1.json"))
+    experiment_config_path = os.getenv("V2_LEGACY_EXPERIMENT_CONFIG_PATH", str(repo / "configs" / "experiment_config.json"))
+    legacy_builder_path = os.getenv("V2_LEGACY_BUILDER_PATH", str(repo / "shared" / "utils" / "model_builder.py"))
     colab_worker_src = repo / "colab-worker" / "src"
     if str(colab_worker_src) not in sys.path:
         sys.path.insert(0, str(colab_worker_src))

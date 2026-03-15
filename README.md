@@ -63,6 +63,37 @@ V2/
 - Prova de prompt complet: `ops/scripts/run_llm_full_prompt_check.py`
 - Compile-check de propostes generades: `ops/scripts/run_generated_proposals_compile_check.py`
 
+## Layout de dades
+
+Per executar el pipeline complet (validacions de models i entrenament de propostes) cal disposar d'uns fitxers CSV de dades.
+
+- **Fitxers esperats** (vegeu `configs/experiment_config.json`):
+  - Entrades:
+    - `entrada_valors.csv`
+    - `entrada_extra.csv`
+    - `min.csv`
+    - `max.csv`
+  - Sortides:
+    - `sortida_min_7d.csv`
+    - `sortida_max_7d.csv`
+    - `sortida_tb.csv`
+    - `sortida_sl.csv`
+    - `sortida_sn.csv`
+    - `sortida_valors_7d.csv`
+
+Per defecte, l'arrel de dades es llegeix de `data_dir` a `configs/experiment_config.json`. El valor per defecte és:
+
+```json
+  "data_dir": "V2/data"
+```
+
+- **Dataset mínim recomanat**:
+  - Pots crear un subconjunt de dades per proves dins `V2/data/min` i, a continuació:
+    - editar `configs/experiment_config.json` i posar `"data_dir": "V2/data/min"`, o
+    - mantenir `"data_dir": "V2/data"` i col·locar el mínim de fitxers directament a `V2/data/`.
+
+Cap d'aquests fitxers de dades es versiona en aquest directori; els has de crear/ubicar tu segons el teu cas d'ús.
+
 ## Posada en marxa local (stack mínima)
 
 1. Iniciar API PHP:
