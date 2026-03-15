@@ -44,10 +44,13 @@ Variables:
 - `V2_LLM_SYSTEM_PROMPT`
 - `V2_LLM_CONFIG_FILE`
 - `V2_LLM_PROMPT_TEMPLATE_FILE`
+- `V2_LLM_FIX_ERROR_PROMPT_FILE`
 - `V2_LLM_ARCHITECTURE_GUIDE_FILE`
 - `V2_LLM_EXPERIMENT_CONFIG_FILE`
 - `V2_LLM_NUM_NEW_MODELS`
 - `V2_LLM_NUM_REFERENCE_MODELS`
+- `V2_LLM_MIN_INTERVAL_SECONDS`
+- `V2_LLM_REPAIR_ON_VALIDATION_ERROR`
 - `V2_TRIAL_MAX_GENERATIONS`
 - `V2_TRIAL_HEARTBEAT_SECONDS`
 - `V2_TRIAL_CODE_VERSION`
@@ -58,4 +61,28 @@ El client API prova automàticament els prefixes ``, `/public/index.php` i `/pub
 Quan `V2_LLM_ENABLED=true`, el worker genera propostes de model per generació i les envia a `/model-proposals`.
 Amb `V2_LLM_USE_LEGACY_INTERFACE=true` reaprofita `utils/llm_interface.py` existent; si no, usa client OpenAI-compatible intern.
 `V2_LLM_CONFIG_FILE` permet carregar clau i model des de JSON (ex: `config/llm_settings.json`) i admet `openai_api_key_env_var`.
+`V2_LLM_MIN_INTERVAL_SECONDS` ajuda a reduir errors 429 separant crides LLM entre generacions.
+`V2_LLM_REPAIR_ON_VALIDATION_ERROR=true` activa reparació automàtica reutilitzant `prompts/fix_model_error.txt` quan el candidat no és compilable.
 Per prova de múltiples generacions curtes: `python ops/scripts/run_multi_generation_trial.py`.
+Per provar models i límits disponibles d'OpenAI: `python ops/scripts/probe_openai_models.py`.
+Per provar prompt complet i crear proposta a API: `python ops/scripts/run_llm_full_prompt_check.py`.
+`run_llm_full_prompt_check.py` fa mode sec per defecte (`V2_PROMPT_SEND_TO_LLM=false`), útil per validar el prompt sense gastar tokens.
+Per compilar propostes creades en un run concret: `python ops/scripts/run_generated_proposals_compile_check.py` amb `V2_TARGET_RUN_ID`.
+
+Flux recomanat per validar V2 amb LLM real:
+
+1. `python ops/scripts/probe_openai_models.py`
+2. `python ops/scripts/run_llm_generation_trial.py`
+3. `python ops/scripts/run_generated_proposals_compile_check.py`
+
+Variables clau per estabilitzar trial:
+
+- `V2_LLM_TRIAL_MODEL=gpt-5.4`
+- `V2_LLM_TRIAL_ENDPOINT=https://api.openai.com/v1/chat/completions`
+- `V2_LLM_REPAIR_ON_VALIDATION_ERROR=true`
+- `V2_LLM_FIX_ERROR_PROMPT_FILE=prompts/fix_model_error.txt`
+
+Notes operatives:
+
+- Si el trial mostra endpoint amb backticks o espais, fes `git pull` a `/content/b-ia` i torna a executar.
+- Missatges CUDA/cuDNN a Colab CPU són informatius; no impliquen error funcional del worker.

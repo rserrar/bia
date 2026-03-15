@@ -30,10 +30,13 @@ class WorkerConfig:
     llm_system_prompt: str
     llm_config_file: str
     llm_prompt_template_file: str
+    llm_fix_error_prompt_file: str
     llm_architecture_guide_file: str
     llm_experiment_config_file: str
     llm_num_new_models: int
     llm_num_reference_models: int
+    llm_min_interval_seconds: int
+    llm_repair_on_validation_error: bool
     verify_legacy_model_build: bool
     legacy_build_check_strict: bool
     legacy_model_json_path: str
@@ -59,6 +62,14 @@ def load_worker_config() -> WorkerConfig:
     if file_api_key == "" and file_env_var:
         file_api_key = os.getenv(file_env_var, "").strip()
 
+    raw_endpoint = os.getenv("V2_LLM_ENDPOINT", "")
+    cleaned_endpoint = raw_endpoint.strip().replace("`", "").strip().strip("'").strip('"').strip()
+    cleaned_endpoint = cleaned_endpoint.rstrip(",").strip()
+    if "," in cleaned_endpoint and cleaned_endpoint.startswith("http"):
+        parts = [part.strip() for part in cleaned_endpoint.split(",") if part.strip() != ""]
+        if len(parts) > 0:
+            cleaned_endpoint = parts[0]
+
     return WorkerConfig(
         api_base_url=os.getenv("V2_API_BASE_URL", "http://localhost:8080"),
         api_path_prefix=os.getenv("V2_API_PATH_PREFIX", ""),
@@ -73,9 +84,9 @@ def load_worker_config() -> WorkerConfig:
         llm_enabled=os.getenv("V2_LLM_ENABLED", "false").lower() in {"1", "true", "yes"},
         llm_use_legacy_interface=os.getenv("V2_LLM_USE_LEGACY_INTERFACE", "true").lower() in {"1", "true", "yes"},
         llm_provider=os.getenv("V2_LLM_PROVIDER", "mock"),
-        llm_endpoint=os.getenv("V2_LLM_ENDPOINT", ""),
+        llm_endpoint=cleaned_endpoint,
         llm_api_key=os.getenv("V2_LLM_API_KEY", file_api_key),
-        llm_model=os.getenv("V2_LLM_MODEL", "gpt-5.3-codex"),
+        llm_model=os.getenv("V2_LLM_MODEL", "gpt-5.4"),
         llm_timeout_seconds=int(os.getenv("V2_LLM_TIMEOUT_SECONDS", "45")),
         llm_temperature=float(os.getenv("V2_LLM_TEMPERATURE", "0.2")),
         llm_max_tokens=int(os.getenv("V2_LLM_MAX_TOKENS", "700")),
@@ -85,10 +96,13 @@ def load_worker_config() -> WorkerConfig:
         ),
         llm_config_file=os.getenv("V2_LLM_CONFIG_FILE", "config/llm_settings.json"),
         llm_prompt_template_file=os.getenv("V2_LLM_PROMPT_TEMPLATE_FILE", "prompts/generate_new_models.txt"),
+        llm_fix_error_prompt_file=os.getenv("V2_LLM_FIX_ERROR_PROMPT_FILE", "prompts/fix_model_error.txt"),
         llm_architecture_guide_file=os.getenv("V2_LLM_ARCHITECTURE_GUIDE_FILE", "prompts/instruccions.md"),
         llm_experiment_config_file=os.getenv("V2_LLM_EXPERIMENT_CONFIG_FILE", "/content/b-ia/config_experiment.json"),
         llm_num_new_models=int(os.getenv("V2_LLM_NUM_NEW_MODELS", "1")),
         llm_num_reference_models=int(os.getenv("V2_LLM_NUM_REFERENCE_MODELS", "3")),
+        llm_min_interval_seconds=int(os.getenv("V2_LLM_MIN_INTERVAL_SECONDS", "20")),
+        llm_repair_on_validation_error=os.getenv("V2_LLM_REPAIR_ON_VALIDATION_ERROR", "true").lower() in {"1", "true", "yes"},
         verify_legacy_model_build=os.getenv("V2_VERIFY_LEGACY_MODEL_BUILD", "").lower() in {"1", "true", "yes"},
         legacy_build_check_strict=os.getenv("V2_LEGACY_BUILD_CHECK_STRICT", "").lower() in {"1", "true", "yes"},
         legacy_model_json_path=os.getenv("V2_LEGACY_MODEL_JSON_PATH", "/content/b-ia/models/base/model_exemple_complex_v1.json"),

@@ -92,6 +92,22 @@ def _resolve_llm_api_key() -> str:
     return ""
 
 
+def _looks_placeholder(api_key: str) -> bool:
+    upper = api_key.upper()
+    markers = ["<", ">", "NOVA_CLAU", "LA_TEVA", "YOUR_", "*****", "XXXX"]
+    return any(marker in upper for marker in markers)
+
+
+def _clean_endpoint(raw: str) -> str:
+    value = str(raw or "").replace("`", "").strip().strip("'").strip('"').strip()
+    value = value.rstrip(",").strip()
+    if "," in value and value.startswith("http"):
+        parts = [part.strip() for part in value.split(",") if part.strip() != ""]
+        if len(parts) > 0:
+            value = parts[0]
+    return value
+
+
 def main() -> int:
     repo = _repo_root()
     worker_src = repo / "colab-worker" / "src"
@@ -113,6 +129,10 @@ def main() -> int:
     os.environ["V2_LLM_ENABLED"] = "true"
     os.environ["V2_LLM_PROVIDER"] = os.getenv("V2_LLM_PROVIDER", "openai")
     os.environ["V2_LLM_USE_LEGACY_INTERFACE"] = os.getenv("V2_LLM_USE_LEGACY_INTERFACE", "true")
+    os.environ["V2_LLM_MODEL"] = os.getenv("V2_LLM_TRIAL_MODEL", os.getenv("V2_LLM_MODEL", "gpt-5.4"))
+    raw_endpoint = os.getenv("V2_LLM_TRIAL_ENDPOINT", os.getenv("V2_LLM_ENDPOINT", "https://api.openai.com/v1/chat/completions"))
+    os.environ["V2_LLM_ENDPOINT"] = _clean_endpoint(raw_endpoint) or "https://api.openai.com/v1/chat/completions"
+    os.environ["V2_LLM_MIN_INTERVAL_SECONDS"] = os.getenv("V2_LLM_MIN_INTERVAL_SECONDS", "20")
     os.environ["V2_AUTO_PROCESS_PROPOSALS_PHASE0"] = "true"
     provider = os.getenv("V2_LLM_PROVIDER", "openai").strip().lower()
     if provider != "mock":
@@ -122,15 +142,31 @@ def main() -> int:
                 "LLM provider requires API key. Defineix OPENAI_API_KEY o V2_LLM_API_KEY "
                 "o configura-la a V2_LLM_CONFIG_FILE."
             )
+        if _looks_placeholder(key):
+            raise RuntimeError(
+                "La clau API sembla un placeholder. "
+                "Configura OPENAI_API_KEY amb una clau real."
+            )
     print(f"[trial] provider seleccionat: {provider}")
     engine_source = (worker_src / "engine.py").read_text(encoding="utf-8")
+    llm_client_source = (worker_src / "llm_client.py").read_text(encoding="utf-8")
     engine_has_llm_hook = "_create_model_proposal_if_enabled" in engine_source and "llm_proposal_created" in engine_source
     if not engine_has_llm_hook:
         raise RuntimeError(
             "El codi del worker no inclou el hook LLM esperat. "
             "Fes git pull a /content/b-ia i torna a provar."
         )
+    has_repair_hook = "_auto_repair_candidate_structure" in llm_client_source and "repair_on_validation_error" in llm_client_source
+    if not has_repair_hook:
+        raise RuntimeError(
+            "El codi del worker no inclou la reparació automàtica de candidates. "
+            "Fes git pull a /content/b-ia i torna a provar."
+        )
     runtime_config = load_worker_config()
+    cleaned_runtime_endpoint = _clean_endpoint(runtime_config.llm_endpoint)
+    if cleaned_runtime_endpoint != runtime_config.llm_endpoint:
+        os.environ["V2_LLM_ENDPOINT"] = cleaned_runtime_endpoint
+        runtime_config = load_worker_config()
     print(
         "[trial] config efectiva: "
         f"llm_enabled={runtime_config.llm_enabled}, "
@@ -201,10 +237,13 @@ def main() -> int:
         "latest_event_type": summary.get("latest_event", {}).get("event_type"),
         "latest_event_label": summary.get("latest_event", {}).get("label"),
         "provider": provider,
+        "runtime_llm_min_interval_seconds": runtime_config.llm_min_interval_seconds,
+        "runtime_llm_repair_on_validation_error": runtime_config.llm_repair_on_validation_error,
         "runtime_llm_enabled": runtime_config.llm_enabled,
         "runtime_llm_provider": runtime_config.llm_provider,
         "runtime_llm_use_legacy": runtime_config.llm_use_legacy_interface,
         "runtime_llm_model": runtime_config.llm_model,
+        "runtime_llm_endpoint": runtime_config.llm_endpoint,
         "runtime_llm_api_key_present": runtime_config.llm_api_key.strip() != "",
         "engine_has_llm_hook": engine_has_llm_hook,
         "checkpoint_path": str(checkpoint_path),

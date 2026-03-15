@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,10 +24,12 @@ class LlmConfig:
     max_tokens: int
     system_prompt: str
     prompt_template_file: str
+    fix_error_prompt_file: str
     architecture_guide_file: str
     experiment_config_file: str
     num_new_models: int
     num_reference_models: int
+    repair_on_validation_error: bool
 
 
 class LlmProposalClient:
@@ -105,7 +108,14 @@ class LlmProposalClient:
             raise RuntimeError("Legacy LLM interface returned empty response")
         extracted = self._extract_first_json_payload(str(response_text))
         parsed = json.loads(extracted)
-        return self._normalize_candidate_response(parsed, provider="legacy_interface")
+        candidate = self._normalize_candidate_response(parsed, provider="legacy_interface")
+        try:
+            return self._validate_candidate(candidate)
+        except Exception as validation_error:
+            repaired = self._repair_candidate_after_validation_error(candidate, str(validation_error), context)
+            if repaired is None:
+                raise
+            return self._validate_candidate(repaired)
 
     def _generate_openai_compatible(self, context: dict[str, Any]) -> dict[str, Any]:
         if self.config.endpoint.strip() == "":
@@ -127,6 +137,99 @@ class LlmProposalClient:
             prompt_text = prompt_builder.build_prompt(context)
         except Exception:
             prompt_text = json.dumps(context, ensure_ascii=False)
+        attempt_endpoint = endpoint
+        use_max_completion_tokens = False
+        retries_for_server_error = 2
+        max_tokens_override: int | None = None
+        data: dict[str, Any] = {}
+        content = ""
+        for _ in range(4):
+            payload = self._build_payload(attempt_endpoint, prompt_text, use_max_completion_tokens, max_tokens_override)
+            response = requests.post(
+                attempt_endpoint,
+                headers={
+                    "Authorization": f"Bearer {self.config.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=self.config.timeout_seconds,
+            )
+            if response.status_code >= 400:
+                error_payload = {}
+                try:
+                    error_payload = response.json()
+                except Exception:
+                    error_payload = {}
+                error = error_payload.get("error", {}) if isinstance(error_payload, dict) else {}
+                error_message = str(error.get("message", "") or "")
+                error_code = str(error.get("code", "") or "")
+                is_chat_endpoint = attempt_endpoint.endswith("/chat/completions")
+                if is_chat_endpoint and "not a chat model" in error_message.lower():
+                    attempt_endpoint = "https://api.openai.com/v1/completions"
+                    continue
+                if error_code == "unsupported_parameter" and "max_tokens" in error_message and not use_max_completion_tokens:
+                    use_max_completion_tokens = True
+                    continue
+                if response.status_code >= 500 and retries_for_server_error > 0:
+                    retries_for_server_error -= 1
+                    time.sleep(1.5)
+                    continue
+                response.raise_for_status()
+            data = response.json()
+            content = self._extract_content_from_response(data, attempt_endpoint)
+            if content == "":
+                choices = data.get("choices") if isinstance(data, dict) else None
+                first_choice = choices[0] if isinstance(choices, list) and len(choices) > 0 and isinstance(choices[0], dict) else {}
+                finish_reason = str(first_choice.get("finish_reason", "") or "")
+                if finish_reason == "length":
+                    current_max = max_tokens_override if isinstance(max_tokens_override, int) and max_tokens_override > 0 else int(self.config.max_tokens)
+                    increased_max = min(max(current_max * 2, current_max + 400), 4000)
+                    if increased_max > current_max:
+                        max_tokens_override = increased_max
+                        continue
+            break
+        if content == "":
+            choices = data.get("choices") if isinstance(data, dict) else None
+            first_choice = choices[0] if isinstance(choices, list) and len(choices) > 0 and isinstance(choices[0], dict) else {}
+            finish_reason = first_choice.get("finish_reason", None) if isinstance(first_choice, dict) else None
+            raw_preview = json.dumps(data, ensure_ascii=False)[:1200] if isinstance(data, dict) else str(data)[:1200]
+            raise RuntimeError(
+                f"OpenAI response content is empty (endpoint={attempt_endpoint}, "
+                f"finish_reason={finish_reason}, raw_preview={raw_preview})"
+            )
+        extracted = self._extract_first_json_payload(content)
+        parsed = json.loads(extracted)
+        candidate = self._normalize_candidate_response(parsed, provider=self.config.provider)
+        try:
+            candidate = self._validate_candidate(candidate)
+        except Exception as validation_error:
+            repaired = self._repair_candidate_after_validation_error(candidate, str(validation_error), context)
+            if repaired is None:
+                raise
+            candidate = self._validate_candidate(repaired)
+        metadata = candidate.get("llm_metadata")
+        metadata_payload = metadata if isinstance(metadata, dict) else {}
+        metadata_payload["raw_response"] = data
+        candidate["llm_metadata"] = metadata_payload
+        return candidate
+
+    def _build_payload(
+        self,
+        endpoint: str,
+        prompt_text: str,
+        use_max_completion_tokens: bool,
+        max_tokens_override: int | None = None,
+    ) -> dict[str, Any]:
+        max_tokens_value = max_tokens_override if isinstance(max_tokens_override, int) and max_tokens_override > 0 else self.config.max_tokens
+        max_tokens_key = "max_completion_tokens" if use_max_completion_tokens else "max_tokens"
+        if endpoint.endswith("/completions") and not endpoint.endswith("/chat/completions"):
+            payload = {
+                "model": self.config.model,
+                "prompt": f"{self.config.system_prompt}\n\n{prompt_text}",
+                "temperature": self.config.temperature,
+                max_tokens_key: max_tokens_value,
+            }
+            return payload
         payload = {
             "model": self.config.model,
             "messages": [
@@ -134,33 +237,51 @@ class LlmProposalClient:
                 {"role": "user", "content": prompt_text},
             ],
             "temperature": self.config.temperature,
-            "max_tokens": self.config.max_tokens,
+            max_tokens_key: max_tokens_value,
         }
-        response = requests.post(
-            endpoint,
-            headers={
-                "Authorization": f"Bearer {self.config.api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=self.config.timeout_seconds,
-        )
-        response.raise_for_status()
-        data = response.json()
-        content = str(((data.get("choices") or [{}])[0].get("message") or {}).get("content", "")).strip()
-        extracted = self._extract_first_json_payload(content)
-        parsed = json.loads(extracted)
-        candidate = self._normalize_candidate_response(parsed, provider=self.config.provider)
-        metadata = candidate.get("llm_metadata")
-        metadata_payload = metadata if isinstance(metadata, dict) else {}
-        metadata_payload["raw_response"] = data
-        candidate["llm_metadata"] = metadata_payload
-        return candidate
+        return payload
+
+    def _extract_content_from_response(self, data: dict[str, Any], endpoint: str) -> str:
+        choices = data.get("choices")
+        first_choice = choices[0] if isinstance(choices, list) and len(choices) > 0 and isinstance(choices[0], dict) else {}
+        if endpoint.endswith("/completions") and not endpoint.endswith("/chat/completions"):
+            return str(first_choice.get("text", "")).strip()
+        message = first_choice.get("message")
+        if isinstance(message, dict):
+            message_content = message.get("content", "")
+            if isinstance(message_content, str):
+                value = message_content.strip()
+                if value != "":
+                    return value
+            if isinstance(message_content, list):
+                parts: list[str] = []
+                for item in message_content:
+                    if isinstance(item, dict):
+                        if isinstance(item.get("text"), str):
+                            parts.append(str(item.get("text")))
+                            continue
+                        nested_text = item.get("text", {})
+                        if isinstance(nested_text, dict) and isinstance(nested_text.get("value"), str):
+                            parts.append(str(nested_text.get("value")))
+                joined = "\n".join([part for part in parts if part.strip() != ""]).strip()
+                if joined != "":
+                    return joined
+        if isinstance(first_choice.get("text"), str):
+            fallback_text = str(first_choice.get("text")).strip()
+            if fallback_text != "":
+                return fallback_text
+        if isinstance(data.get("output_text"), str):
+            output_text = str(data.get("output_text")).strip()
+            if output_text != "":
+                return output_text
+        return ""
 
     def _resolve_endpoint(self, endpoint: str) -> str:
         trimmed = endpoint.strip().rstrip("/")
         if trimmed == "":
             return "https://api.openai.com/v1/chat/completions"
+        if trimmed.endswith("/completions"):
+            return trimmed
         if trimmed.endswith("/chat/completions"):
             return trimmed
         return f"{trimmed}/chat/completions"
@@ -231,3 +352,316 @@ class LlmProposalClient:
                 "llm_metadata": {"provider": provider, "model": self.config.model, "response_format": "model_definition"},
             }
         raise RuntimeError("LLM response is neither JSON object nor JSON list")
+
+    def _repair_candidate_after_validation_error(
+        self,
+        candidate: dict[str, Any],
+        validation_error: str,
+        context: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if not self.config.repair_on_validation_error:
+            return None
+        auto_repaired = self._auto_repair_candidate_structure(candidate)
+        if auto_repaired is not None:
+            return auto_repaired
+        model_definition = self._extract_model_definition(candidate)
+        if model_definition is None:
+            return None
+        prompt_text = self._build_repair_prompt(model_definition, validation_error, context)
+        if prompt_text.strip() == "":
+            return None
+        if self.config.use_legacy_interface:
+            repaired = self._repair_with_legacy_interface(prompt_text, context)
+        else:
+            repaired = self._repair_with_openai_compatible(prompt_text)
+        if repaired is None:
+            return None
+        repaired_candidate = self._normalize_candidate_response(repaired, provider=f"{self.config.provider}_repair")
+        repaired_metadata = repaired_candidate.get("llm_metadata")
+        repaired_metadata_payload = repaired_metadata if isinstance(repaired_metadata, dict) else {}
+        repaired_metadata_payload["repair_from_error"] = validation_error
+        repaired_candidate["llm_metadata"] = repaired_metadata_payload
+        return repaired_candidate
+
+    def _auto_repair_candidate_structure(self, candidate: dict[str, Any]) -> dict[str, Any] | None:
+        model_definition = self._extract_model_definition(candidate)
+        if not isinstance(model_definition, dict):
+            return None
+        architecture = model_definition.get("architecture_definition")
+        if not isinstance(architecture, dict):
+            return None
+        changed = False
+        used_inputs = architecture.get("used_inputs")
+        if not isinstance(used_inputs, list) or len(used_inputs) == 0:
+            autofilled_inputs = self._autofill_used_inputs(architecture)
+            if len(autofilled_inputs) > 0:
+                architecture["used_inputs"] = autofilled_inputs
+                changed = True
+        output_heads = architecture.get("output_heads")
+        if not isinstance(output_heads, list) or len(output_heads) == 0:
+            autofilled_heads = self._autofill_output_heads(architecture)
+            if len(autofilled_heads) > 0:
+                architecture["output_heads"] = autofilled_heads
+                changed = True
+        return candidate if changed else None
+
+    def _autofill_used_inputs(self, architecture: dict[str, Any]) -> list[dict[str, Any]]:
+        experiment = self._read_json(self.config.experiment_config_file)
+        candidates: list[dict[str, Any]] = []
+        features = experiment.get("input_features_config", [])
+        if isinstance(features, list):
+            mandatory = [item for item in features if isinstance(item, dict) and bool(item.get("is_mandatory_input", False))]
+            ordered = mandatory if len(mandatory) > 0 else [item for item in features if isinstance(item, dict)]
+            for item in ordered[:4]:
+                input_layer_name = str(item.get("default_input_layer_name", "")).strip()
+                source_feature_name = str(item.get("feature_name", "")).strip()
+                total_columns = int(item.get("total_columns", 0) or 0)
+                if input_layer_name == "" or source_feature_name == "" or total_columns <= 0:
+                    continue
+                candidates.append(
+                    {
+                        "input_layer_name": input_layer_name,
+                        "source_feature_name": source_feature_name,
+                        "shape": [total_columns],
+                    }
+                )
+        if len(candidates) > 0:
+            return candidates
+        branches = architecture.get("branches", [])
+        if isinstance(branches, list):
+            seen: set[str] = set()
+            for branch in branches:
+                if not isinstance(branch, dict):
+                    continue
+                input_name = str(branch.get("input_source_layer", "")).strip()
+                if input_name == "" or input_name in seen:
+                    continue
+                seen.add(input_name)
+                candidates.append(
+                    {
+                        "input_layer_name": input_name,
+                        "source_feature_name": input_name,
+                        "shape": [1],
+                    }
+                )
+        return candidates
+
+    def _autofill_output_heads(self, architecture: dict[str, Any]) -> list[dict[str, Any]]:
+        experiment = self._read_json(self.config.experiment_config_file)
+        targets = experiment.get("output_targets_config", [])
+        source_feature_map = self._guess_source_feature_map(architecture)
+        if source_feature_map == "":
+            return []
+        heads: list[dict[str, Any]] = []
+        if isinstance(targets, list):
+            mandatory = [item for item in targets if isinstance(item, dict) and bool(item.get("is_mandatory_output", False))]
+            ordered = mandatory if len(mandatory) > 0 else [item for item in targets if isinstance(item, dict)]
+            for item in ordered[:4]:
+                target_name = str(item.get("target_name", "")).strip()
+                if target_name == "":
+                    continue
+                output_layer_name = str(item.get("default_output_layer_name", "")).strip() or f"output_{target_name}"
+                total_columns = int(item.get("total_columns", 1) or 1)
+                activation = str(item.get("activation_output_layer", "")).strip() or "linear"
+                heads.append(
+                    {
+                        "output_layer_name": output_layer_name,
+                        "maps_to_target_config_name": target_name,
+                        "source_feature_map": source_feature_map,
+                        "units": max(1, total_columns),
+                        "activation": activation,
+                    }
+                )
+        return heads
+
+    def _guess_source_feature_map(self, architecture: dict[str, Any]) -> str:
+        merges = architecture.get("merges", [])
+        if isinstance(merges, list) and len(merges) > 0:
+            for merge in reversed(merges):
+                if not isinstance(merge, dict):
+                    continue
+                out = str(merge.get("output_feature_map_name", "")).strip()
+                if out != "":
+                    return out
+        branches = architecture.get("branches", [])
+        if isinstance(branches, list) and len(branches) > 0:
+            for branch in reversed(branches):
+                if not isinstance(branch, dict):
+                    continue
+                out = str(branch.get("output_feature_map_name", "")).strip()
+                if out != "":
+                    return out
+        used_inputs = architecture.get("used_inputs", [])
+        if isinstance(used_inputs, list) and len(used_inputs) > 0:
+            first = used_inputs[0]
+            if isinstance(first, dict):
+                return str(first.get("input_layer_name", "")).strip()
+        return ""
+
+    def _extract_model_definition(self, candidate: dict[str, Any]) -> dict[str, Any] | None:
+        proposal = candidate.get("proposal")
+        if not isinstance(proposal, dict):
+            return None
+        model_definition = proposal.get("model_definition")
+        if isinstance(model_definition, dict):
+            return model_definition
+        if isinstance(proposal.get("architecture_definition"), dict):
+            return proposal
+        return None
+
+    def _build_repair_prompt(self, model_definition: dict[str, Any], validation_error: str, context: dict[str, Any]) -> str:
+        template = self._read_text(self.config.fix_error_prompt_file)
+        if template.strip() == "":
+            return ""
+        experiment = self._read_json(self.config.experiment_config_file)
+        architecture_guide = self._read_text(self.config.architecture_guide_file)
+        references = context.get("reference_models")
+        working_example = references[0] if isinstance(references, list) and len(references) > 0 and isinstance(references[0], dict) else {}
+        prompt = template
+        prompt = prompt.replace("{{buggy_model_json}}", json.dumps(model_definition, ensure_ascii=False, indent=2))
+        prompt = prompt.replace("{{error_traceback}}", validation_error)
+        prompt = prompt.replace("{{working_model_example_json}}", json.dumps(working_example, ensure_ascii=False, indent=2))
+        prompt = prompt.replace("{{available_inputs_description}}", self._inputs_description(experiment))
+        prompt = prompt.replace("{{available_outputs_description}}", self._outputs_description(experiment))
+        prompt = prompt.replace("{{architecture_guide_content}}", architecture_guide)
+        return prompt
+
+    def _repair_with_legacy_interface(self, prompt_text: str, context: dict[str, Any]) -> dict[str, Any] | None:
+        repo_root = Path(__file__).resolve().parents[3]
+        if str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+        try:
+            from utils.llm_interface import ask_openai
+        except Exception:
+            return None
+        llm_config = {
+            "openai_api_key": self.config.api_key or os.getenv("OPENAI_API_KEY", ""),
+            "api_url": self._resolve_endpoint(self.config.endpoint),
+            "openai_model_name": self.config.model,
+            "system_message": self.config.system_prompt,
+            "max_tokens": max(1200, int(self.config.max_tokens)),
+            "temperature": self.config.temperature,
+        }
+        if str(llm_config["openai_api_key"]).strip() == "":
+            return None
+        response_text = ask_openai(
+            prompt_text,
+            llm_config,
+            context_for_log={"task_type": "v2_fix_model_error", "generation_num": context.get("generation")},
+        )
+        if not response_text:
+            return None
+        extracted = self._extract_first_json_payload(str(response_text))
+        parsed = json.loads(extracted)
+        if isinstance(parsed, dict):
+            return parsed
+        if isinstance(parsed, list) and len(parsed) > 0 and isinstance(parsed[0], dict):
+            return parsed[0]
+        return None
+
+    def _repair_with_openai_compatible(self, prompt_text: str) -> dict[str, Any] | None:
+        endpoint = self._resolve_endpoint(self.config.endpoint)
+        payload = self._build_payload(endpoint, prompt_text, False, max(1200, int(self.config.max_tokens)))
+        response = requests.post(
+            endpoint,
+            headers={
+                "Authorization": f"Bearer {self.config.api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=self.config.timeout_seconds,
+        )
+        response.raise_for_status()
+        data = response.json()
+        content = self._extract_content_from_response(data, endpoint)
+        if content.strip() == "":
+            return None
+        extracted = self._extract_first_json_payload(content)
+        parsed = json.loads(extracted)
+        if isinstance(parsed, dict):
+            return parsed
+        if isinstance(parsed, list) and len(parsed) > 0 and isinstance(parsed[0], dict):
+            return parsed[0]
+        return None
+
+    def _resolve_path(self, file_path: str) -> Path:
+        raw = Path(file_path)
+        if raw.is_absolute():
+            return raw
+        repo_root = Path(__file__).resolve().parents[3]
+        return (repo_root / raw).resolve()
+
+    def _read_text(self, file_path: str) -> str:
+        path = self._resolve_path(file_path)
+        if not path.exists():
+            return ""
+        return path.read_text(encoding="utf-8")
+
+    def _read_json(self, file_path: str) -> dict[str, Any]:
+        path = self._resolve_path(file_path)
+        if not path.exists():
+            return {}
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
+
+    def _inputs_description(self, experiment: dict[str, Any]) -> str:
+        rows: list[str] = []
+        for item in experiment.get("input_features_config", [])[:30]:
+            if not isinstance(item, dict):
+                continue
+            rows.append(
+                f"- feature_name={item.get('feature_name', 'unknown')}, "
+                f"default_input_layer_name={item.get('default_input_layer_name', 'n/a')}, "
+                f"total_columns={item.get('total_columns', 'n/a')}"
+            )
+        return "\n".join(rows) if rows else "No input features config available."
+
+    def _outputs_description(self, experiment: dict[str, Any]) -> str:
+        rows: list[str] = []
+        for item in experiment.get("output_targets_config", [])[:30]:
+            if not isinstance(item, dict):
+                continue
+            rows.append(
+                f"- target_name={item.get('target_name', 'unknown')}, "
+                f"default_output_layer_name={item.get('default_output_layer_name', 'n/a')}, "
+                f"total_columns={item.get('total_columns', 'n/a')}, "
+                f"is_mandatory_output={item.get('is_mandatory_output', False)}"
+            )
+        return "\n".join(rows) if rows else "No output targets config available."
+
+    def _validate_candidate(self, candidate: dict[str, Any]) -> dict[str, Any]:
+        proposal = candidate.get("proposal")
+        if not isinstance(proposal, dict) or len(proposal) == 0:
+            raise RuntimeError("LLM candidate proposal is empty or invalid")
+        model_definition = proposal.get("model_definition")
+        if not isinstance(model_definition, dict):
+            if isinstance(proposal.get("architecture_definition"), dict):
+                model_definition = proposal
+                candidate["proposal"] = {"model_definition": model_definition}
+            else:
+                raise RuntimeError("LLM candidate must include model_definition")
+        model_definition = self._normalize_model_definition_schema(model_definition)
+        candidate["proposal"] = {"model_definition": model_definition}
+        architecture = model_definition.get("architecture_definition", {})
+        if not isinstance(architecture, dict):
+            raise RuntimeError("LLM model_definition misses architecture_definition")
+        used_inputs = architecture.get("used_inputs", [])
+        output_heads = architecture.get("output_heads", [])
+        if not isinstance(used_inputs, list) or len(used_inputs) == 0:
+            raise RuntimeError("LLM model_definition has empty used_inputs")
+        if not isinstance(output_heads, list) or len(output_heads) == 0:
+            raise RuntimeError("LLM model_definition has empty output_heads")
+        return candidate
+
+    def _normalize_model_definition_schema(self, model_definition: dict[str, Any]) -> dict[str, Any]:
+        architecture = model_definition.get("architecture_definition")
+        if not isinstance(architecture, dict):
+            architecture = {}
+        for key in ["used_inputs", "branches", "merges", "output_heads"]:
+            if isinstance(model_definition.get(key), list) and key not in architecture:
+                architecture[key] = model_definition.get(key)
+        model_definition["architecture_definition"] = architecture
+        return model_definition

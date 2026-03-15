@@ -16,3 +16,7 @@ Document de desplegament real:
 - `scripts/check_legacy_model_compat.py`: comprova construcció de model com la versió antiga
 - `scripts/go_no_go_check.py`: checklist previ abans d'executar run real
 - `scripts/run_phase0_model_validation.py`: prova compilació/execució curta per varietat de models
+- `scripts/run_llm_generation_trial.py`: trial E2E de generació LLM sobre l'API real
+- `scripts/probe_openai_models.py`: comprova models disponibles i headers de rate-limit
+- `scripts/run_llm_full_prompt_check.py`: valida prompt complet (mode sec o amb enviament LLM/API)
+- `scripts/run_generated_proposals_compile_check.py`: compila propostes d'un `run_id` i reporta errors de schema

@@ -31,6 +31,7 @@ class EvolutionWorkerEngine:
         self.api = api_client
         self.checkpoints = checkpoint_store
         self.state = self._load_state()
+        self.last_llm_call_ts = 0.0
         self.llm = LlmProposalClient(
             LlmConfig(
                 enabled=self.config.llm_enabled,
@@ -44,10 +45,12 @@ class EvolutionWorkerEngine:
                 max_tokens=self.config.llm_max_tokens,
                 system_prompt=self.config.llm_system_prompt,
                 prompt_template_file=self.config.llm_prompt_template_file,
+                fix_error_prompt_file=self.config.llm_fix_error_prompt_file,
                 architecture_guide_file=self.config.llm_architecture_guide_file,
                 experiment_config_file=self.config.llm_experiment_config_file,
                 num_new_models=self.config.llm_num_new_models,
                 num_reference_models=self.config.llm_num_reference_models,
+                repair_on_validation_error=self.config.llm_repair_on_validation_error,
             )
         )
 
@@ -119,6 +122,11 @@ class EvolutionWorkerEngine:
     def _create_model_proposal_if_enabled(self, run_id: str, generation: int, metrics: dict[str, float | int]) -> None:
         if not self.config.llm_enabled:
             return
+        min_interval = max(0, int(self.config.llm_min_interval_seconds))
+        if min_interval > 0 and self.last_llm_call_ts > 0:
+            elapsed = time.time() - self.last_llm_call_ts
+            if elapsed < min_interval:
+                time.sleep(min_interval - elapsed)
         context = {
             "run_id": run_id,
             "generation": generation,
@@ -126,6 +134,7 @@ class EvolutionWorkerEngine:
             "code_version": self.config.code_version,
         }
         try:
+            self.last_llm_call_ts = time.time()
             candidate = self.llm.generate_candidate(context)
             if not candidate:
                 return

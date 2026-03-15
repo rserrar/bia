@@ -46,7 +46,7 @@ os.environ["V2_LLM_USE_LEGACY_INTERFACE"] = "true"
 os.environ["V2_LLM_PROVIDER"] = "mock"
 os.environ["V2_LLM_ENDPOINT"] = "https://api.openai.com/v1/chat/completions"
 os.environ["V2_LLM_API_KEY"] = ""
-os.environ["V2_LLM_MODEL"] = "gpt-5.3-codex"
+os.environ["V2_LLM_MODEL"] = "gpt-5.4"
 os.environ["V2_LLM_CONFIG_FILE"] = "/content/b-ia/config/llm_settings.json"
 os.environ["V2_LLM_PROMPT_TEMPLATE_FILE"] = "prompts/generate_new_models.txt"
 os.environ["V2_LLM_ARCHITECTURE_GUIDE_FILE"] = "prompts/instruccions.md"
@@ -109,11 +109,60 @@ os.environ["V2_TRIAL_VERIFY_LEGACY"] = "false"
 import os
 os.environ["V2_LLM_PROVIDER"] = "openai"
 os.environ["V2_LLM_USE_LEGACY_INTERFACE"] = "true"
+os.environ["V2_LLM_TRIAL_MODEL"] = "gpt-5.4"
+os.environ["V2_LLM_TRIAL_ENDPOINT"] = "https://api.openai.com/v1/chat/completions"
+os.environ["V2_LLM_FIX_ERROR_PROMPT_FILE"] = "prompts/fix_model_error.txt"
+os.environ["V2_LLM_REPAIR_ON_VALIDATION_ERROR"] = "true"
 os.environ["V2_LLM_TRIAL_GENERATIONS"] = "4"
+os.environ["V2_LLM_MIN_INTERVAL_SECONDS"] = "35"
 os.environ["OPENAI_API_KEY"] = "<nova_clau>"
 if "<nova_clau>" in os.environ["OPENAI_API_KEY"]:
     raise RuntimeError("Configura OPENAI_API_KEY amb una clau real abans de la prova GPT.")
 !cd /content/b-ia && git pull
+!python ops/scripts/run_llm_generation_trial.py
+```
+
+## Cèl·lula 10: Probe d'accés i límits OpenAI
+
+```python
+import os
+os.environ["OPENAI_API_KEY"] = "<nova_clau>"
+os.environ["V2_OPENAI_PROBE_MODELS"] = "gpt-5.4,o4-mini,gpt-5.3-codex"
+!python ops/scripts/probe_openai_models.py
+```
+
+## Cèl·lula 11: Prova de prompt complet + proposta real
+
+```python
+import os
+os.environ["V2_LLM_ENABLED"] = "true"
+os.environ["V2_LLM_PROVIDER"] = "openai"
+os.environ["V2_LLM_USE_LEGACY_INTERFACE"] = "true"
+os.environ["V2_LLM_MODEL"] = "gpt-5.4"
+os.environ["V2_LLM_ENDPOINT"] = "https://api.openai.com/v1/chat/completions"
+os.environ["V2_LLM_MIN_INTERVAL_SECONDS"] = "35"
+os.environ["OPENAI_API_KEY"] = "<nova_clau>"
+os.environ["V2_PROMPT_REFERENCE_MODEL_PATH"] = "/content/b-ia/models/base/model_exemple_complex_v1.json"
+os.environ["V2_PROMPT_SEND_TO_LLM"] = "false"
+os.environ["V2_PROMPT_PUSH_TO_API"] = "false"
+!python ops/scripts/run_llm_full_prompt_check.py
+```
+
+## Cèl·lula 12: Compilar propostes generades del run
+
+```python
+import os
+os.environ["V2_TARGET_RUN_ID"] = "<run_id_del_trial>"
+!python ops/scripts/run_generated_proposals_compile_check.py
+```
+
+## Cèl·lula 13: Activar reparació automàtica i repetir trial
+
+```python
+import os
+os.environ["V2_LLM_FIX_ERROR_PROMPT_FILE"] = "prompts/fix_model_error.txt"
+os.environ["V2_LLM_REPAIR_ON_VALIDATION_ERROR"] = "true"
+os.environ["V2_LLM_TRIAL_GENERATIONS"] = "4"
 !python ops/scripts/run_llm_generation_trial.py
 ```
 
