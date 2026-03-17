@@ -183,10 +183,15 @@ class ModelTrainerEngine:
                 
             model_def["model_id"] = proposal_id
 
-            # 2. Reutilitzar els scripts de dades del V1 per fer la neteja
-            from utils.data_loading_utils import load_all_raw_data_sources, derive_additional_features_and_targets
-            from utils.data_preparation_utils import prepare_model_specific_inputs_outputs, split_and_scale_data
-            from utils.model_builder import build_model_from_json_definition
+            # 2. Reutilitzar utilitats de dades/model (shared first, legacy fallback)
+            try:
+                from shared.utils.data_loading_utils import load_all_raw_data_sources, derive_additional_features_and_targets
+                from shared.utils.data_preparation_utils import prepare_model_specific_inputs_outputs, split_and_scale_data
+                from shared.utils.model_builder import build_model_from_json_definition
+            except ModuleNotFoundError:
+                from utils.data_loading_utils import load_all_raw_data_sources, derive_additional_features_and_targets
+                from utils.data_preparation_utils import prepare_model_specific_inputs_outputs, split_and_scale_data
+                from utils.model_builder import build_model_from_json_definition
 
             print("📊 Carregant el fitxer de configuració de l'experiment (V1 compatibility)...")
             experiment_path = Path(

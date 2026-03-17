@@ -1,0 +1,157 @@
+from __future__ import annotations
+
+from typing import Any
+
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
+
+
+def prepare_model_specific_inputs_outputs(
+    all_loaded_data: dict[str, np.ndarray],
+    model_json_definition: dict[str, Any],
+) -> tuple[list[np.ndarray], list[np.ndarray], list[str], list[str]]:
+    x_list: list[np.ndarray] = []
+    y_list: list[np.ndarray] = []
+    input_names: list[str] = []
+    output_names: list[str] = []
+
+    arch = model_json_definition.get("architecture_definition", {})
+    input_cfg_runtime = model_json_definition.get("input_features_config_runtime", [])
+    output_cfg_runtime = model_json_definition.get("output_targets_config_runtime", [])
+
+    for input_conf in arch.get("used_inputs", []):
+        input_layer_name = str(input_conf.get("input_layer_name", "")).strip()
+        source_feature_name = str(input_conf.get("source_feature_name", "")).strip()
+        if input_layer_name == "" or source_feature_name == "":
+            continue
+        arr = all_loaded_data.get(source_feature_name, np.array([]))
+        if arr.size == 0:
+            mandatory = any(
+                isinstance(item, dict)
+                and item.get("feature_name") == source_feature_name
+                and bool(item.get("is_mandatory_input", False))
+                for item in input_cfg_runtime
+            )
+            if mandatory:
+                raise ValueError(f"Missing mandatory input feature: {source_feature_name}")
+            continue
+        x_list.append(arr)
+        input_names.append(input_layer_name)
+
+    for head_conf in arch.get("output_heads", []):
+        output_layer_name = str(head_conf.get("output_layer_name", "")).strip()
+        maps_to = str(head_conf.get("maps_to_target_config_name", "")).strip()
+        if output_layer_name == "":
+            continue
+
+        target_cfg = None
+        for item in output_cfg_runtime:
+            if not isinstance(item, dict):
+                continue
+            if maps_to and str(item.get("target_name", "")) == maps_to:
+                target_cfg = item
+                break
+            if str(item.get("default_output_layer_name", "")) == output_layer_name:
+                target_cfg = item
+                break
+        if not isinstance(target_cfg, dict):
+            continue
+
+        target_name = str(target_cfg.get("target_name", "")).strip()
+        if target_name == "":
+            continue
+        arr = all_loaded_data.get(target_name, np.array([]))
+        if arr.size == 0 and bool(target_cfg.get("is_mandatory_output", False)):
+            raise ValueError(f"Missing mandatory output target: {target_name}")
+        if arr.size == 0:
+            continue
+        y_list.append(arr)
+        output_names.append(output_layer_name)
+
+    return x_list, y_list, input_names, output_names
+
+
+def split_and_scale_data(
+    x_model_list: list[np.ndarray],
+    y_model_list: list[np.ndarray],
+    _model_input_keras_names: list[str],
+    experiment_config: dict[str, Any],
+    model_json_definition: dict[str, Any],
+) -> tuple[
+    tuple[list[np.ndarray], list[np.ndarray]],
+    tuple[list[np.ndarray], list[np.ndarray]],
+    tuple[list[np.ndarray], list[np.ndarray]],
+    dict[str, MinMaxScaler],
+]:
+    if not x_model_list or not y_model_list:
+        empty_x = [np.array([]) for _ in x_model_list]
+        empty_y = [np.array([]) for _ in y_model_list]
+        return (empty_x, empty_y), (empty_x, empty_y), (empty_x, empty_y), {}
+
+    n_samples = x_model_list[0].shape[0]
+    if n_samples == 0:
+        empty_x = [x.copy() for x in x_model_list]
+        empty_y = [y.copy() for y in y_model_list]
+        return (empty_x, empty_y), (empty_x, empty_y), (empty_x, empty_y), {}
+
+    eval_params = experiment_config.get("evaluator_params", {})
+    val_split = float(eval_params.get("validation_split", 0.15))
+    test_split = float(eval_params.get("test_split", 0.10))
+    seed = int(model_json_definition.get("training_config", {}).get("seed", experiment_config.get("global_seed", 42)))
+
+    indices = np.arange(n_samples)
+    train_val_idx, test_idx = train_test_split(indices, test_size=test_split, random_state=seed, shuffle=True)
+    if val_split > 0 and len(train_val_idx) >= 2:
+        effective_val = val_split / max(1e-6, (1.0 - test_split))
+        effective_val = min(max(effective_val, 0.0), 0.9)
+        train_idx, val_idx = train_test_split(train_val_idx, test_size=effective_val, random_state=seed, shuffle=True)
+    else:
+        train_idx = train_val_idx
+        val_idx = np.array([], dtype=int)
+
+    def select(parts: list[np.ndarray], idx: np.ndarray) -> list[np.ndarray]:
+        return [arr[idx] if arr.size > 0 else arr for arr in parts]
+
+    x_train = select(x_model_list, train_idx)
+    y_train = select(y_model_list, train_idx)
+    x_val = select(x_model_list, val_idx)
+    y_val = select(y_model_list, val_idx)
+    x_test = select(x_model_list, test_idx)
+    y_test = select(y_model_list, test_idx)
+
+    scalers: dict[str, MinMaxScaler] = {}
+    x_train_scaled: list[np.ndarray] = []
+    x_val_scaled: list[np.ndarray] = []
+    x_test_scaled: list[np.ndarray] = []
+
+    for idx, arr_train in enumerate(x_train):
+        if arr_train.size == 0:
+            x_train_scaled.append(arr_train)
+            x_val_scaled.append(x_val[idx])
+            x_test_scaled.append(x_test[idx])
+            continue
+        scaler = MinMaxScaler()
+        train_shape = arr_train.shape
+        train_flat = arr_train.reshape(-1, train_shape[-1]) if arr_train.ndim > 2 else arr_train.reshape(train_shape[0], -1)
+        train_scaled = scaler.fit_transform(train_flat).reshape(train_shape)
+        x_train_scaled.append(train_scaled)
+
+        val_arr = x_val[idx]
+        if val_arr.size > 0:
+            val_shape = val_arr.shape
+            val_flat = val_arr.reshape(-1, val_shape[-1]) if val_arr.ndim > 2 else val_arr.reshape(val_shape[0], -1)
+            x_val_scaled.append(scaler.transform(val_flat).reshape(val_shape))
+        else:
+            x_val_scaled.append(val_arr)
+
+        test_arr = x_test[idx]
+        if test_arr.size > 0:
+            test_shape = test_arr.shape
+            test_flat = test_arr.reshape(-1, test_shape[-1]) if test_arr.ndim > 2 else test_arr.reshape(test_shape[0], -1)
+            x_test_scaled.append(scaler.transform(test_flat).reshape(test_shape))
+        else:
+            x_test_scaled.append(test_arr)
+        scalers[f"input_{idx}"] = scaler
+
+    return (x_train_scaled, y_train), (x_val_scaled, y_val), (x_test_scaled, y_test), scalers
