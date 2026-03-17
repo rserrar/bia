@@ -41,6 +41,7 @@ class WorkerConfig:
     max_generations: int
     auto_process_proposals_phase0: bool
     proposals_phase0_batch_size: int
+    bootstrap_seed_model_if_empty: bool
     llm_enabled: bool
     llm_use_legacy_interface: bool
     llm_provider: str
@@ -103,6 +104,7 @@ def load_worker_config() -> WorkerConfig:
         max_generations=int(os.getenv("V2_MAX_GENERATIONS", "3")),
         auto_process_proposals_phase0=os.getenv("V2_AUTO_PROCESS_PROPOSALS_PHASE0", "true").lower() in {"1", "true", "yes"},
         proposals_phase0_batch_size=int(os.getenv("V2_PROPOSALS_PHASE0_BATCH_SIZE", "20")),
+        bootstrap_seed_model_if_empty=os.getenv("V2_BOOTSTRAP_SEED_MODEL_IF_EMPTY", "true").lower() in {"1", "true", "yes"},
         llm_enabled=os.getenv("V2_LLM_ENABLED", "false").lower() in {"1", "true", "yes"},
         llm_use_legacy_interface=os.getenv("V2_LLM_USE_LEGACY_INTERFACE", "true").lower() in {"1", "true", "yes"},
         llm_provider=os.getenv("V2_LLM_PROVIDER", "mock"),

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import time
 import json
+import copy
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -318,6 +319,47 @@ class EvolutionWorkerEngine:
             if self.config.legacy_build_check_strict:
                 raise
 
+    def _bootstrap_seed_model_if_needed(self, run_id: str) -> None:
+        if not self.config.bootstrap_seed_model_if_empty:
+            return
+        try:
+            existing = self.api.list_model_proposals(limit=1)
+        except Exception:
+            return
+        if len(existing) > 0:
+            return
+
+        references = self._load_reference_models_from_file(1)
+        if len(references) == 0:
+            return
+        seed_model = copy.deepcopy(references[0])
+        if not isinstance(seed_model, dict):
+            return
+        seed_model.pop("reference_status", None)
+        seed_model.pop("last_evaluation_metrics_summary", None)
+
+        base_model_id = str(seed_model.get("model_id", "seed_model_base")).strip() or "seed_model_base"
+        llm_metadata = {
+            "seed_bootstrap": True,
+            "seed_source": os.getenv("V2_PROMPT_REFERENCE_MODEL_PATH", "models/base/model_exemple_complex_v1.json"),
+            "seed_created_by": "engine_bootstrap",
+        }
+        created = self.api.create_model_proposal(
+            source_run_id=run_id,
+            base_model_id=base_model_id,
+            proposal={"model_definition": seed_model},
+            llm_metadata=llm_metadata,
+        )
+        proposal_id = str(created.get("proposal_id", "")).strip()
+        if proposal_id != "":
+            self.api.enqueue_model_proposal_phase0(proposal_id)
+        self.api.add_event(
+            run_id,
+            "seed_model_bootstrapped",
+            "Model de prova inicial creat automàticament",
+            {"proposal_id": proposal_id, "base_model_id": base_model_id},
+        )
+
     def _process_queued_proposals_phase0_if_enabled(self) -> None:
         if not self.config.auto_process_proposals_phase0:
             return
@@ -353,6 +395,7 @@ class EvolutionWorkerEngine:
             self._save_state()
             return
         self._verify_legacy_model_build_if_enabled()
+        self._bootstrap_seed_model_if_needed(run_id)
         self._process_queued_proposals_phase0_if_enabled()
         self.api.update_status(run_id, "running", self.state.generation)
         last_heartbeat = 0.0
