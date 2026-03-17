@@ -45,7 +45,7 @@ class ModelTrainerEngine:
     def __init__(self, api_client: ApiClient, config: dict[str, Any]):
         self.api = api_client
         self.trainer_id = "colab_trainer_" + str(int(time.time()))
-        self.repo_root = Path(__file__).resolve().parents[3]
+        self.repo_root = Path(__file__).resolve().parents[2]
         
         # We need the old V1 builder / evaluator helpers
         import sys

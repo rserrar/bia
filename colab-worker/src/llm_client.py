@@ -71,7 +71,7 @@ class LlmProposalClient:
         from shared.clients.llm_interface import ask_openai  # type: ignore[import]
         from v2_prompt_builder import V2PromptBuilder
 
-        repo_root = Path(__file__).resolve().parents[3]
+        repo_root = Path(__file__).resolve().parents[2]
         prompt_builder = V2PromptBuilder(
             repo_root=repo_root,
             prompt_template_file=self.config.prompt_template_file,
@@ -121,7 +121,7 @@ class LlmProposalClient:
         endpoint = self._resolve_endpoint(self.config.endpoint)
         try:
             from v2_prompt_builder import V2PromptBuilder
-            repo_root = Path(__file__).resolve().parents[3]
+            repo_root = Path(__file__).resolve().parents[2]
             prompt_builder = V2PromptBuilder(
                 repo_root=repo_root,
                 prompt_template_file=self.config.prompt_template_file,
@@ -583,7 +583,7 @@ class LlmProposalClient:
         raw = Path(file_path)
         if raw.is_absolute():
             return raw
-        repo_root = Path(__file__).resolve().parents[3]
+        repo_root = Path(__file__).resolve().parents[2]
         return (repo_root / raw).resolve()
 
     def _read_text(self, file_path: str) -> str:
