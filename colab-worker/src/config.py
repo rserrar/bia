@@ -33,6 +33,7 @@ class WorkerConfig:
     api_base_url: str
     api_path_prefix: str
     api_token: str
+    api_timeout_seconds: int
     code_version: str
     run_metadata: dict
     checkpoint_path: str
@@ -94,6 +95,7 @@ def load_worker_config() -> WorkerConfig:
         api_base_url=os.getenv("V2_API_BASE_URL", "http://localhost:8080"),
         api_path_prefix=os.getenv("V2_API_PATH_PREFIX", ""),
         api_token=os.getenv("V2_API_TOKEN", ""),
+        api_timeout_seconds=int(os.getenv("V2_API_TIMEOUT_SECONDS", "20")),
         code_version=os.getenv("V2_CODE_VERSION", "dev"),
         run_metadata={"executor": "colab"},
         checkpoint_path=os.getenv("V2_CHECKPOINT_PATH", "/content/drive/MyDrive/bia_v2/run_state.json"),

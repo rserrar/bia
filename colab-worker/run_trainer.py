@@ -20,6 +20,7 @@ def main():
     api = ApiClient(
         base_url=config.api_base_url,
         token=config.api_token,
+        timeout_seconds=config.api_timeout_seconds,
         api_path_prefix=config.api_path_prefix,
     )
     

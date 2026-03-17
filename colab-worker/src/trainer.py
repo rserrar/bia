@@ -296,29 +296,44 @@ class ModelTrainerEngine:
             trained_model_path = trained_models_dir / f"{proposal_id}.keras"
             keras_model.save(str(trained_model_path))
             model_storage = "drive" if "/content/drive" in str(trained_model_path).replace("\\", "/") else "local"
-            self.api.add_artifact(
-                run_id,
-                artifact_type="trained_model",
-                uri=str(trained_model_path),
-                storage=model_storage,
-                metadata={"proposal_id": proposal_id, "trainer_id": self.trainer_id},
-            )
+            print(f"📡 API: pujant artifact trained_model per {proposal_id}...")
+            try:
+                self.api.add_artifact(
+                    run_id,
+                    artifact_type="trained_model",
+                    uri=str(trained_model_path),
+                    storage=model_storage,
+                    metadata={"proposal_id": proposal_id, "trainer_id": self.trainer_id},
+                )
+                print("✅ API: artifact registrat")
+            except Exception as artifact_error:
+                print(f"⚠️ API: no s'ha pogut registrar artifact ({artifact_error})")
 
             # Ens assegurem de notificar a l'API V2
+            print(f"📡 API: actualitzant status a trained per {proposal_id}...")
             self.api.update_proposal_status(proposal_id, "trained", {
                 "training_kpis": metrics,
                 "training_time": elapsed,
                 "total_epochs_trained": len(history.history['loss']),
                 "trained_model_uri": str(trained_model_path),
             })
-            
+            print("✅ API: status trained actualitzat")
+
+            print(f"📡 API: enviant event model_training_completed per {proposal_id}...")
             self.api.add_event(run_id, "model_training_completed", f"El model acceptat {proposal_id} s'ha entrenat.", {"metrics": metrics})
+            print("✅ API: event model_training_completed enviat")
 
         except Exception as e:
             err_msg = str(e)
             print(f"⚠️ Fallada catastròfica entrenant {proposal_id}: {err_msg}")
             traceback.print_exc()
-            self.api.update_proposal_status(proposal_id, "rejected", {
-                "training_error": err_msg
-            })
-            self.api.add_event(run_id, "model_training_failed", f"Error a l'entrenar {proposal_id}", {"error": err_msg})
+            try:
+                self.api.update_proposal_status(proposal_id, "rejected", {
+                    "training_error": err_msg
+                })
+            except Exception as status_error:
+                print(f"⚠️ API: no s'ha pogut marcar rejected ({status_error})")
+            try:
+                self.api.add_event(run_id, "model_training_failed", f"Error a l'entrenar {proposal_id}", {"error": err_msg})
+            except Exception as event_error:
+                print(f"⚠️ API: no s'ha pogut enviar event failed ({event_error})")
