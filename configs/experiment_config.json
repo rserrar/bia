@@ -7,7 +7,7 @@
   "controller_params": {
     "num_generations_to_run": 6
   },
-  "data_dir": "V2/data/min",
+  "data_dir": "data/min",
   "data_paths": {
     "entrada_valors": "entrada_valors.csv",
     "entrada_extra": "entrada_extra.csv",
@@ -15,11 +15,11 @@
     "max_historics": "max.csv",
     "entrada_valors_ultim_csv_col": 799,
     "sortida_min_7d": "sortida_min.csv",
-    "sortida_max_7d": "sortida_max_7d.csv",
+    "sortida_max_7d": "sortida_max.csv",
     "sortida_tb": "sortida_tb.csv",
     "sortida_sl": "sortida_sl.csv",
     "sortida_sn": "sortida_sn.csv",
-    "sortida_valors_7d": "sortida_valors_7d.csv",
+    "sortida_valors_7d": "sortida_valors.csv",
     "sortida_valors_100d_anteriors_slice_from_entrada_valors": [-100, null]
   },
   "evaluator_params": {

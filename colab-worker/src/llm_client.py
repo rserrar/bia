@@ -383,6 +383,11 @@ class LlmProposalClient:
         model_definition = self._extract_model_definition(candidate)
         if not isinstance(model_definition, dict):
             return None
+        model_definition = self._normalize_model_definition_schema(model_definition)
+        proposal_payload = candidate.get("proposal")
+        if isinstance(proposal_payload, dict):
+            proposal_payload["model_definition"] = model_definition
+            candidate["proposal"] = proposal_payload
         architecture = model_definition.get("architecture_definition")
         if not isinstance(architecture, dict):
             return None
@@ -640,6 +645,18 @@ class LlmProposalClient:
             raise RuntimeError("LLM model_definition misses architecture_definition")
         used_inputs = architecture.get("used_inputs", [])
         output_heads = architecture.get("output_heads", [])
+        if (not isinstance(used_inputs, list) or len(used_inputs) == 0) or (
+            not isinstance(output_heads, list) or len(output_heads) == 0
+        ):
+            repaired = self._auto_repair_candidate_structure(candidate)
+            if repaired is not None:
+                repaired_proposal = repaired.get("proposal")
+                repaired_model_definition = repaired_proposal.get("model_definition") if isinstance(repaired_proposal, dict) else None
+                if isinstance(repaired_model_definition, dict):
+                    architecture = repaired_model_definition.get("architecture_definition", {})
+                    used_inputs = architecture.get("used_inputs", []) if isinstance(architecture, dict) else []
+                    output_heads = architecture.get("output_heads", []) if isinstance(architecture, dict) else []
+                    candidate = repaired
         if not isinstance(used_inputs, list) or len(used_inputs) == 0:
             raise RuntimeError("LLM model_definition has empty used_inputs")
         if not isinstance(output_heads, list) or len(output_heads) == 0:
