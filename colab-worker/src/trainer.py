@@ -4,41 +4,94 @@ import json
 import logging
 import traceback
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 try:
     import tensorflow as tf
-    from tensorflow.keras.callbacks import Callback
+    from tensorflow.keras.callbacks import Callback as KerasCallback
+    CallbackBase = KerasCallback
 except ImportError:
     tf = None
+    CallbackBase = object
 
 from src.api_client import ApiClient
 
 # A callback that prints out epoch progression visibly and gracefully stops 
 # the training if it exceeds a specified max time limit.
-class TrainerFeedbackAndLimitCallback(Callback):
-    def __init__(self, proposal_id: str, max_training_seconds: int = 0):
+class TrainerFeedbackAndLimitCallback(CallbackBase):
+    def __init__(
+        self,
+        proposal_id: str,
+        max_training_seconds: int = 0,
+        api_client: ApiClient | None = None,
+        run_id: str = "",
+    ):
         super().__init__()
         self.proposal_id = proposal_id
         self.max_training_seconds = max_training_seconds
         self.start_time = 0.0
+        self.api = api_client
+        self.run_id = run_id
+
+    def _emit_event(self, event_type: str, label: str, details: dict[str, Any] | None = None) -> None:
+        if self.api is None or self.run_id.strip() == "":
+            return
+        try:
+            self.api.add_event(self.run_id, event_type, label, details or {})
+        except Exception:
+            return
 
     def on_train_begin(self, logs=None):
         self.start_time = time.time()
         print(f"\n🚀 Inciant entrenament pesat pel model {self.proposal_id}")
         if self.max_training_seconds > 0:
             print(f"⏱️ Límit establert a: {self.max_training_seconds} segons.")
+        self._emit_event(
+            "model_training_started",
+            f"Entrenament iniciat per {self.proposal_id}",
+            {"proposal_id": self.proposal_id, "max_training_seconds": self.max_training_seconds},
+        )
 
     def on_epoch_begin(self, epoch, logs=None):
         print(f"🔄 Model {self.proposal_id} - Començant època {epoch + 1}...")
+        self._emit_event(
+            "model_training_epoch_start",
+            f"Model {self.proposal_id} · inici època {epoch + 1}",
+            {"proposal_id": self.proposal_id, "epoch": int(epoch + 1)},
+        )
 
     def on_epoch_end(self, epoch, logs=None):
         elapsed = time.time() - self.start_time
         metrics_str = " | ".join([f"{k}: {v:.4f}" for k, v in (logs or {}).items()])
         print(f"✅ Època {epoch + 1} completada - {metrics_str} - Temps transcòrregut: {elapsed:.1f}s")
+        metrics_payload: dict[str, Any] = {}
+        for key, value in (logs or {}).items():
+            try:
+                metrics_payload[str(key)] = float(value)
+            except Exception:
+                metrics_payload[str(key)] = str(value)
+        self._emit_event(
+            "model_training_epoch_end",
+            f"Model {self.proposal_id} · fi època {epoch + 1}",
+            {
+                "proposal_id": self.proposal_id,
+                "epoch": int(epoch + 1),
+                "elapsed_seconds": round(float(elapsed), 2),
+                "metrics": metrics_payload,
+            },
+        )
         
         if self.max_training_seconds > 0 and elapsed > self.max_training_seconds:
             print(f"🛑 ATENCIÓ: Temps límit d'entrenament superat ({elapsed:.1f}s > {self.max_training_seconds}s). S'interromp l'entrenament.")
+            self._emit_event(
+                "model_training_stopped_by_time_limit",
+                f"Model {self.proposal_id} aturat per límit de temps",
+                {
+                    "proposal_id": self.proposal_id,
+                    "elapsed_seconds": round(float(elapsed), 2),
+                    "max_training_seconds": self.max_training_seconds,
+                },
+            )
             self.model.stop_training = True
 
 class ModelTrainerEngine:
@@ -93,7 +146,14 @@ class ModelTrainerEngine:
             from utils.model_builder import build_model_from_json_definition
 
             print("📊 Carregant el fitxer de configuració de l'experiment (V1 compatibility)...")
-            experiment_path = self.repo_root / "config_experiment.json"
+            experiment_path = Path(
+                os.getenv(
+                    "V2_LEGACY_EXPERIMENT_CONFIG_PATH",
+                    str(self.repo_root / "configs" / "experiment_config.json"),
+                )
+            )
+            if not experiment_path.is_absolute():
+                experiment_path = (self.repo_root / experiment_path).resolve()
             with open(experiment_path, "r", encoding="utf-8") as f:
                 exp_config = json.load(f)
 
@@ -125,7 +185,14 @@ class ModelTrainerEngine:
             batch_sz = model_def.get("training_config", {}).get("fit", {}).get("batch_size", 64)
             
             # Protecció contra èpoques excessives si cal fer testing ràpid
-            callbacks = [TrainerFeedbackAndLimitCallback(proposal_id, self.max_training_seconds)]
+            callbacks = [
+                TrainerFeedbackAndLimitCallback(
+                    proposal_id,
+                    self.max_seconds_per_model,
+                    api_client=self.api,
+                    run_id=run_id,
+                )
+            ]
             
             print(f"🔥 Donant inici al mètode keras_model.fit() per un màxim de {epochs} èpoques.")
             start_t = time.time()
@@ -135,7 +202,7 @@ class ModelTrainerEngine:
                 epochs=epochs,
                 batch_size=batch_sz,
                 verbose=0,  # Apaguem el verbose per defecte i treballem amb el de la consola 
-                callbacks=callbacks
+                callbacks=cast(Any, callbacks)
             )
             elapsed = time.time() - start_t
             
@@ -147,11 +214,32 @@ class ModelTrainerEngine:
 
             print(f"🟢 Entrenament del model {proposal_id} complet! Reportant estatus a l'API.")
 
+            trained_models_dir = Path(
+                os.getenv(
+                    "V2_TRAINED_MODELS_DIR",
+                    str(self.repo_root / "colab-worker" / "checkpoints" / "trained_models"),
+                )
+            )
+            if not trained_models_dir.is_absolute():
+                trained_models_dir = (self.repo_root / trained_models_dir).resolve()
+            trained_models_dir.mkdir(parents=True, exist_ok=True)
+            trained_model_path = trained_models_dir / f"{proposal_id}.keras"
+            keras_model.save(str(trained_model_path))
+            model_storage = "drive" if "/content/drive" in str(trained_model_path).replace("\\", "/") else "local"
+            self.api.add_artifact(
+                run_id,
+                artifact_type="trained_model",
+                uri=str(trained_model_path),
+                storage=model_storage,
+                metadata={"proposal_id": proposal_id, "trainer_id": self.trainer_id},
+            )
+
             # Ens assegurem de notificar a l'API V2
             self.api.update_proposal_status(proposal_id, "trained", {
                 "training_kpis": metrics,
                 "training_time": elapsed,
-                "total_epochs_trained": len(history.history['loss'])
+                "total_epochs_trained": len(history.history['loss']),
+                "trained_model_uri": str(trained_model_path),
             })
             
             self.api.add_event(run_id, "model_training_completed", f"El model acceptat {proposal_id} s'ha entrenat.", {"metrics": metrics})

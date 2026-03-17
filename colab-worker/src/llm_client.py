@@ -106,12 +106,14 @@ class LlmProposalClient:
         parsed = json.loads(extracted)
         candidate = self._normalize_candidate_response(parsed, provider="legacy_interface")
         try:
-            return self._validate_candidate(candidate)
+            candidate = self._validate_candidate(candidate)
         except Exception as validation_error:
             repaired = self._repair_candidate_after_validation_error(candidate, str(validation_error), context)
             if repaired is None:
                 raise
-            return self._validate_candidate(repaired)
+            candidate = self._validate_candidate(repaired)
+        self._attach_prompt_audit_metadata(candidate, context, prompt_text)
+        return candidate
 
     def _generate_openai_compatible(self, context: dict[str, Any]) -> dict[str, Any]:
         if self.config.endpoint.strip() == "":
@@ -207,7 +209,28 @@ class LlmProposalClient:
         metadata_payload = metadata if isinstance(metadata, dict) else {}
         metadata_payload["raw_response"] = data
         candidate["llm_metadata"] = metadata_payload
+        self._attach_prompt_audit_metadata(candidate, context, prompt_text)
         return candidate
+
+    def _attach_prompt_audit_metadata(self, candidate: dict[str, Any], context: dict[str, Any], prompt_text: str) -> None:
+        metadata = candidate.get("llm_metadata")
+        metadata_payload = metadata if isinstance(metadata, dict) else {}
+        references = context.get("reference_models")
+        ref_count = len([item for item in references if isinstance(item, dict)]) if isinstance(references, list) else 0
+        latest_metrics = context.get("latest_metrics") if isinstance(context.get("latest_metrics"), dict) else {}
+        metadata_payload["prompt_audit"] = {
+            "generation": int(context.get("generation", 0)),
+            "run_id": str(context.get("run_id", "")),
+            "code_version": str(context.get("code_version", "")),
+            "reference_models_count": ref_count,
+            "latest_metrics": latest_metrics,
+            "prompt_chars": len(prompt_text),
+            "prompt_preview": prompt_text[:1000],
+            "prompt_template_file": self.config.prompt_template_file,
+            "architecture_guide_file": self.config.architecture_guide_file,
+            "experiment_config_file": self.config.experiment_config_file,
+        }
+        candidate["llm_metadata"] = metadata_payload
 
     def _build_payload(
         self,
