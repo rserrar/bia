@@ -66,6 +66,14 @@ function redirectToMonitorHome(): void
     exit;
 }
 
+function monitorCredentials(): array
+{
+    return [
+        'username' => 'admin',
+        'password' => 'bia-v2-monitor',
+    ];
+}
+
 function ensureMonitorSessionIfConfigured(): void
 {
     if (session_status() !== PHP_SESSION_ACTIVE) {
@@ -87,6 +95,22 @@ function ensureMonitorSessionIfConfigured(): void
         return;
     }
 
+    $loginError = '';
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && (string) ($_POST['action'] ?? '') === 'login') {
+        $username = is_string($_POST['username'] ?? null) ? trim((string) $_POST['username']) : '';
+        $password = is_string($_POST['password'] ?? null) ? (string) $_POST['password'] : '';
+        $credentials = monitorCredentials();
+        if (
+            hash_equals($credentials['username'], $username)
+            && hash_equals($credentials['password'], $password)
+        ) {
+            $_SESSION['monitor_auth'] = true;
+            session_regenerate_id(true);
+            redirectToMonitorHome();
+        }
+        $loginError = 'Usuari o contrasenya incorrectes.';
+    }
+
     $header = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
     $queryToken = is_string($_GET['token'] ?? null) ? (string) $_GET['token'] : '';
     $headerToken = '';
@@ -106,11 +130,25 @@ function ensureMonitorSessionIfConfigured(): void
     http_response_code(401);
     header('Content-Type: text/html; charset=utf-8');
     echo '<!doctype html><html lang="ca"><head><meta charset="utf-8"><title>V2 Monitor Login</title></head><body>';
-    echo '<h1>V2 Monitor</h1><p>Introdueix el token per iniciar sessió.</p>';
-    echo '<form method="get" action="./monitor.php">';
-    echo '<input type="password" name="token" placeholder="Token" required>';
+    echo '<h1>V2 Monitor</h1>';
+    echo '<p>Inicia sessió amb usuari i contrasenya.</p>';
+    if ($loginError !== '') {
+        echo '<p style="color:#b91c1c;">' . htmlspecialchars($loginError, ENT_QUOTES, 'UTF-8') . '</p>';
+    }
+    echo '<form method="post" action="./monitor.php">';
+    echo '<input type="hidden" name="action" value="login">';
+    echo '<input type="text" name="username" placeholder="Usuari" required>';
+    echo '<input type="password" name="password" placeholder="Contrasenya" required>';
     echo '<button type="submit">Entrar</button>';
-    echo '</form></body></html>';
+    echo '</form>';
+    if ($expectedToken !== '') {
+        echo '<hr><p>Alternativa: token (mode compatible)</p>';
+        echo '<form method="get" action="./monitor.php">';
+        echo '<input type="password" name="token" placeholder="Token">';
+        echo '<button type="submit">Entrar amb token</button>';
+        echo '</form>';
+    }
+    echo '</body></html>';
     exit;
 }
 

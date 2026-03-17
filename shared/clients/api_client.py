@@ -167,6 +167,14 @@ class ApiClient:
     def enqueue_model_proposal_phase0(self, proposal_id: str) -> dict[str, Any]:
         return self._request("POST", f"/model-proposals/{proposal_id}/enqueue-phase0")
 
+    def list_model_proposals(self, limit: int = 100) -> list[dict[str, Any]]:
+        payload = self._request("GET", f"/model-proposals?limit={max(1, int(limit))}")
+        proposals = payload.get("model_proposals", []) if isinstance(payload, dict) else []
+        return [item for item in proposals if isinstance(item, dict)]
+
+    def get_model_proposal(self, proposal_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/model-proposals/{proposal_id}")
+
     def lock_accepted_proposal_for_training(self, trainer_id: str) -> dict[str, Any] | None:
         try:
             return self._request("POST", "/model-proposals/lock-for-training", {"trainer_id": trainer_id})

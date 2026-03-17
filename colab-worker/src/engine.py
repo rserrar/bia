@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import time
+import json
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 try:
     from .api_client import ApiClient
@@ -136,6 +138,7 @@ class EvolutionWorkerEngine:
             "latest_metrics": metrics,
             "code_version": self.config.code_version,
         }
+        context["reference_models"] = self._collect_reference_models_for_prompt(run_id)
         try:
             self.last_llm_call_ts = time.time()
             print("🤖 Fent petició al LLM per generar una nova proposta. Espera si us plau...")
@@ -184,6 +187,95 @@ class EvolutionWorkerEngine:
                 f"Error creant proposta LLM a generació {generation}",
                 {"error": str(error)},
             )
+
+    def _collect_reference_models_for_prompt(self, run_id: str) -> list[dict[str, object]]:
+        max_refs = max(0, int(self.config.llm_num_reference_models))
+        if max_refs <= 0:
+            return []
+
+        references: list[dict[str, object]] = []
+        try:
+            proposals = self.api.list_model_proposals(limit=300)
+            ranked: list[tuple[float, dict[str, object]]] = []
+            for proposal in proposals:
+                status = str(proposal.get("status", "")).strip()
+                if status not in {"trained", "accepted", "validated_phase0"}:
+                    continue
+                payload = proposal.get("proposal")
+                if not isinstance(payload, dict):
+                    continue
+                model_definition = payload.get("model_definition")
+                if not isinstance(model_definition, dict):
+                    continue
+                llm_metadata_raw = proposal.get("llm_metadata")
+                llm_metadata: dict[str, object] = llm_metadata_raw if isinstance(llm_metadata_raw, dict) else {}
+                training_kpis_raw = llm_metadata.get("training_kpis")
+                kpi_eval_raw = llm_metadata.get("kpi_evaluation")
+                training_kpis: dict[str, object] = training_kpis_raw if isinstance(training_kpis_raw, dict) else {}
+                kpi_eval: dict[str, object] = kpi_eval_raw if isinstance(kpi_eval_raw, dict) else {}
+                val_loss: object = training_kpis.get("val_loss_total", kpi_eval.get("val_loss_total", 9999))
+                if isinstance(val_loss, (int, float, str)):
+                    try:
+                        score = float(val_loss)
+                    except Exception:
+                        score = 9999.0
+                else:
+                    score = 9999.0
+                reference: dict[str, object] = dict(model_definition)
+                reference["model_id"] = str(model_definition.get("model_id", proposal.get("proposal_id", "unknown_model")))
+                reference["reference_status"] = status
+                reference["reference_source_run_id"] = str(proposal.get("source_run_id", ""))
+                reference["last_evaluation_metrics_summary"] = {
+                    "val_loss_total": score,
+                    "training_kpis": training_kpis,
+                    "kpi_evaluation": kpi_eval,
+                }
+                ranked.append((score, reference))
+            ranked.sort(key=lambda item: item[0])
+            references = [item[1] for item in ranked[:max_refs]]
+        except Exception:
+            references = []
+
+        if len(references) == 0:
+            fallback = self._load_reference_models_from_file(max_refs)
+            if len(fallback) > 0:
+                if self.state.run_id:
+                    self.api.add_event(
+                        run_id,
+                        "llm_reference_models_fallback",
+                        "S'han usat models de referència locals per al prompt",
+                        {"count": len(fallback)},
+                    )
+                return fallback
+        return references
+
+    def _load_reference_models_from_file(self, max_refs: int) -> list[dict[str, object]]:
+        path_str = os.getenv("V2_PROMPT_REFERENCE_MODEL_PATH", "models/base/model_exemple_complex_v1.json").strip()
+        if path_str == "":
+            return []
+        raw = Path(path_str)
+        if not raw.is_absolute():
+            raw = (Path(__file__).resolve().parents[2] / raw).resolve()
+        if not raw.exists():
+            return []
+        try:
+            loaded = json.loads(raw.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        models: list[dict[str, object]] = []
+        if isinstance(loaded, dict):
+            models = [loaded]
+        elif isinstance(loaded, list):
+            models = [item for item in loaded if isinstance(item, dict)]
+        if len(models) == 0:
+            return []
+        out: list[dict[str, object]] = []
+        for model in models[:max_refs]:
+            entry = dict(model)
+            entry["reference_status"] = "local_example"
+            entry["last_evaluation_metrics_summary"] = {"source": "local_file", "val_loss_total": None}
+            out.append(entry)
+        return out
 
     def _verify_legacy_model_build_if_enabled(self) -> None:
         if not self.config.verify_legacy_model_build:

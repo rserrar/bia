@@ -91,7 +91,12 @@ URL exemple:
 
 - `https://<host>/public/monitor.php?token=<V2_API_TOKEN>`
 
-Després de validar el token una vegada, el monitor guarda sessió PHP i ja no cal repetir el token a cada clic.
+El monitor inclou pantalla de login amb credencials incrustades al codi (`server-api/php/public/monitor.php`):
+
+- usuari: `admin`
+- contrasenya: `bia-v2-monitor`
+
+Després de validar login (o token), el monitor guarda sessió PHP i ja no cal repetir credencials a cada clic.
 El monitor també mostra `model_proposals`, permet veure'n el detall JSON i canviar l'estat.
 Inclou acció ràpida `Enviar a phase0`, que marca la proposta com `queued_phase0`.
 Inclou botó `Reset dades prova`, que esborra runs, events, mètriques, artifacts i proposals.
