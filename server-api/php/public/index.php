@@ -267,6 +267,16 @@ try {
         respond(200, $service->enqueueModelProposalPhase0($parts[1]));
     }
 
+    if ($method === 'POST' && $parts === ['model-proposals', 'lock-for-training']) {
+        $body = jsonInput();
+        $trainerId = (string) ($body['trainer_id'] ?? 'unknown_trainer');
+        $locked = $service->lockAcceptedProposalForTraining($trainerId);
+        if ($locked === null) {
+            respond(200, []);
+        }
+        respond(200, $locked);
+    }
+
     if ($method === 'GET' && $parts === ['runs']) {
         $limitParam = $_GET['limit'] ?? '100';
         $limit = is_numeric($limitParam) ? (int) $limitParam : 100;

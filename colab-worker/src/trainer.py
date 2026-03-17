@@ -9,16 +9,18 @@ from typing import Any, Optional, cast
 try:
     import tensorflow as tf
     from tensorflow.keras.callbacks import Callback as KerasCallback
-    CallbackBase = KerasCallback
 except ImportError:
     tf = None
-    CallbackBase = object
+
+    class KerasCallback:  # type: ignore[no-redef]
+        def __init__(self, *args, **kwargs):
+            pass
 
 from src.api_client import ApiClient
 
 # A callback that prints out epoch progression visibly and gracefully stops 
 # the training if it exceeds a specified max time limit.
-class TrainerFeedbackAndLimitCallback(CallbackBase):
+class TrainerFeedbackAndLimitCallback(KerasCallback):
     def __init__(
         self,
         proposal_id: str,
@@ -114,6 +116,7 @@ class ModelTrainerEngine:
             try:
                 proposal = self.api.lock_accepted_proposal_for_training(self.trainer_id)
                 if not proposal:
+                    self._auto_promote_validated_phase0_if_needed()
                     time.sleep(10)
                     continue
 
@@ -127,6 +130,46 @@ class ModelTrainerEngine:
             except Exception as e:
                 print(f"❌ Error en el loop d'entrenament global: {e}")
                 time.sleep(15)
+
+    def _auto_promote_validated_phase0_if_needed(self) -> None:
+        try:
+            proposals = self.api.list_model_proposals(limit=300)
+        except Exception:
+            return
+
+        candidates = [
+            p for p in proposals
+            if isinstance(p, dict) and str(p.get("status", "")).strip() == "validated_phase0"
+        ]
+        if len(candidates) == 0:
+            return
+
+        candidates.sort(key=lambda item: str(item.get("updated_at", "")))
+        selected = candidates[0]
+        proposal_id = str(selected.get("proposal_id", "")).strip()
+        if proposal_id == "":
+            return
+
+        try:
+            self.api.update_proposal_status(
+                proposal_id,
+                "accepted",
+                {
+                    "auto_promoted_for_training": True,
+                    "auto_promoted_by": self.trainer_id,
+                },
+            )
+            run_id = str(selected.get("source_run_id", "")).strip()
+            if run_id != "":
+                self.api.add_event(
+                    run_id,
+                    "proposal_auto_promoted_for_training",
+                    f"Proposta {proposal_id} promoguda automàticament a accepted",
+                    {"proposal_id": proposal_id, "trainer_id": self.trainer_id},
+                )
+            print(f"⚙️ Auto-promoció: {proposal_id} -> accepted")
+        except Exception:
+            return
 
     def _train_proposal(self, proposal: dict[str, Any]):
         proposal_id = str(proposal.get("proposal_id", ""))
