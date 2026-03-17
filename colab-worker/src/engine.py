@@ -254,8 +254,26 @@ class EvolutionWorkerEngine:
         if path_str == "":
             return []
         raw = Path(path_str)
-        if not raw.is_absolute():
-            raw = (Path(__file__).resolve().parents[2] / raw).resolve()
+        repo_root = Path(__file__).resolve().parents[2]
+        if raw.is_absolute():
+            if not raw.exists():
+                normalized = str(raw).replace("\\", "/")
+                if "/V2/" in normalized:
+                    candidate = Path(normalized.replace("/V2/", "/", 1))
+                    if candidate.exists():
+                        raw = candidate
+        else:
+            candidate = (repo_root / raw).resolve()
+            if candidate.exists():
+                raw = candidate
+            else:
+                normalized_rel = str(raw).replace("\\", "/")
+                if normalized_rel.startswith("V2/"):
+                    fallback = (repo_root / normalized_rel[3:]).resolve()
+                    if fallback.exists():
+                        raw = fallback
+                else:
+                    raw = candidate
         if not raw.exists():
             return []
         try:

@@ -18,6 +18,29 @@ except ImportError:
 
 from src.api_client import ApiClient
 
+
+def _resolve_repo_path(path_str: str, repo_root: Path) -> Path:
+    raw = Path(path_str.strip())
+    if raw.is_absolute():
+        if raw.exists():
+            return raw
+        normalized = str(raw).replace("\\", "/")
+        marker = "/V2/"
+        if marker in normalized:
+            candidate = Path(normalized.replace(marker, "/", 1))
+            if candidate.exists():
+                return candidate
+        return raw
+    candidate = (repo_root / raw).resolve()
+    if candidate.exists():
+        return candidate
+    normalized_rel = str(raw).replace("\\", "/")
+    if normalized_rel.startswith("V2/"):
+        fallback = (repo_root / normalized_rel[3:]).resolve()
+        if fallback.exists():
+            return fallback
+    return candidate
+
 # A callback that prints out epoch progression visibly and gracefully stops 
 # the training if it exceeds a specified max time limit.
 class TrainerFeedbackAndLimitCallback(KerasCallback):
@@ -200,8 +223,7 @@ class ModelTrainerEngine:
                     str(self.repo_root / "configs" / "experiment_config.json"),
                 )
             )
-            if not experiment_path.is_absolute():
-                experiment_path = (self.repo_root / experiment_path).resolve()
+            experiment_path = _resolve_repo_path(str(experiment_path), self.repo_root)
             with open(experiment_path, "r", encoding="utf-8") as f:
                 exp_config = json.load(f)
 

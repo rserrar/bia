@@ -605,9 +605,24 @@ class LlmProposalClient:
     def _resolve_path(self, file_path: str) -> Path:
         raw = Path(file_path)
         if raw.is_absolute():
+            if raw.exists():
+                return raw
+            normalized = str(raw).replace("\\", "/")
+            if "/V2/" in normalized:
+                fallback = Path(normalized.replace("/V2/", "/", 1))
+                if fallback.exists():
+                    return fallback
             return raw
         repo_root = Path(__file__).resolve().parents[2]
-        return (repo_root / raw).resolve()
+        candidate = (repo_root / raw).resolve()
+        if candidate.exists():
+            return candidate
+        normalized_rel = str(raw).replace("\\", "/")
+        if normalized_rel.startswith("V2/"):
+            fallback = (repo_root / normalized_rel[3:]).resolve()
+            if fallback.exists():
+                return fallback
+        return candidate
 
     def _read_text(self, file_path: str) -> str:
         path = self._resolve_path(file_path)

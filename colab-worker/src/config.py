@@ -6,6 +6,28 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+def _resolve_repo_path(path_str: str, repo_root: Path) -> Path:
+    raw = Path(path_str.strip())
+    if raw.is_absolute():
+        if raw.exists():
+            return raw
+        normalized = str(raw).replace("\\", "/")
+        if "/V2/" in normalized:
+            fallback = Path(normalized.replace("/V2/", "/", 1))
+            if fallback.exists():
+                return fallback
+        return raw
+    candidate = (repo_root / raw).resolve()
+    if candidate.exists():
+        return candidate
+    normalized_rel = str(raw).replace("\\", "/")
+    if normalized_rel.startswith("V2/"):
+        fallback = (repo_root / normalized_rel[3:]).resolve()
+        if fallback.exists():
+            return fallback
+    return candidate
+
+
 @dataclass
 class WorkerConfig:
     api_base_url: str
@@ -45,13 +67,11 @@ class WorkerConfig:
 
 
 def load_worker_config() -> WorkerConfig:
+    repo_root = Path(__file__).resolve().parents[2]
     config_file = os.getenv("V2_LLM_CONFIG_FILE", "")
     file_settings: dict = {}
     if config_file.strip():
-        config_path = Path(config_file.strip())
-        if not config_path.is_absolute() and not config_path.exists():
-            repo_root = Path(__file__).resolve().parents[2]
-            config_path = (repo_root / config_path).resolve()
+        config_path = _resolve_repo_path(config_file, repo_root)
         if config_path.exists():
             try:
                 file_settings = json.loads(config_path.read_text(encoding="utf-8"))
