@@ -32,6 +32,13 @@ Variables útils del supervisor:
 - `V2_SUPERVISOR_AUTO_FEED_MIN_INTERVAL_SECONDS=180`: interval mínim entre auto-feeds
 - `V2_SUPERVISOR_FEED_GENERATIONS=1`: generacions per trial quan auto-feed usa LLM
 
+Variables utiles de selection/champion:
+
+- `V2_SELECTION_POLICY_PROFILE=default|small_test|real_large`
+- `V2_CHAMPION_SCOPE=run|global`
+- `V2_CHAMPION_MIN_SCORE=...` (override opcional)
+- `V2_CHAMPION_MARGIN_MIN=...` (override opcional)
+
 ## Flux curt recomanat (fase de proves)
 
 1. Prova E2E automàtica (1 generació + entrenament + validació final):

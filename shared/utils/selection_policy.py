@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 
@@ -22,6 +23,7 @@ def _to_float(value: Any) -> float | None:
 def default_policy_config() -> dict[str, Any]:
     return {
         "policy_version": "selection_policy_v1",
+        "profile": "default",
         "weights": {
             "loss": 0.55,
             "time": 0.15,
@@ -31,8 +33,64 @@ def default_policy_config() -> dict[str, Any]:
         "loss_cap": 200000.0,
         "time_cap_seconds": 1800.0,
         "hard_time_limit_seconds": 3600.0,
+        "champion_min_score": 45.0,
+        "champion_margin_min": 2.0,
         "allowed_statuses": {"trained", "accepted", "validated_phase0"},
     }
+
+
+def policy_config_for_profile(profile: str) -> dict[str, Any]:
+    selected = (profile or "default").strip().lower()
+    base = default_policy_config()
+    if selected in {"small", "small_test", "test"}:
+        base.update(
+            {
+                "profile": "small_test",
+                "loss_cap": 300000.0,
+                "time_cap_seconds": 900.0,
+                "hard_time_limit_seconds": 1800.0,
+                "champion_min_score": 35.0,
+                "champion_margin_min": 1.0,
+                "weights": {
+                    "loss": 0.50,
+                    "time": 0.20,
+                    "stability": 0.20,
+                    "quality": 0.10,
+                },
+            }
+        )
+    elif selected in {"real", "large", "real_large", "prod"}:
+        base.update(
+            {
+                "profile": "real_large",
+                "loss_cap": 200000.0,
+                "time_cap_seconds": 7200.0,
+                "hard_time_limit_seconds": 14400.0,
+                "champion_min_score": 50.0,
+                "champion_margin_min": 3.0,
+                "weights": {
+                    "loss": 0.65,
+                    "time": 0.05,
+                    "stability": 0.20,
+                    "quality": 0.10,
+                },
+            }
+        )
+    return base
+
+
+def load_policy_config_from_env() -> dict[str, Any]:
+    profile = os.getenv("V2_SELECTION_POLICY_PROFILE", "default")
+    cfg = policy_config_for_profile(profile)
+    try:
+        cfg["champion_min_score"] = float(os.getenv("V2_CHAMPION_MIN_SCORE", str(cfg.get("champion_min_score", 45.0))))
+    except Exception:
+        pass
+    try:
+        cfg["champion_margin_min"] = float(os.getenv("V2_CHAMPION_MARGIN_MIN", str(cfg.get("champion_margin_min", 2.0))))
+    except Exception:
+        pass
+    return cfg
 
 
 def evaluate_reference_candidate(proposal: dict[str, Any], config: dict[str, Any] | None = None) -> dict[str, Any]:

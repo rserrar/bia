@@ -6,6 +6,8 @@ import traceback
 from pathlib import Path
 from typing import Any, Optional, cast
 
+from shared.utils.selection_policy import evaluate_reference_candidate, load_policy_config_from_env
+
 try:
     import tensorflow as tf
     from tensorflow.keras.callbacks import Callback as KerasCallback
@@ -132,6 +134,10 @@ class ModelTrainerEngine:
             
         self.config = config
         self.max_seconds_per_model = int(config.get("max_training_seconds", 0))
+        self.selection_policy_config = load_policy_config_from_env()
+        self.champion_scope = os.getenv("V2_CHAMPION_SCOPE", "run").strip().lower()
+        if self.champion_scope not in {"run", "global"}:
+            self.champion_scope = "run"
 
     def run_loop(self):
         print(f"🟢 [Trainer Worker: {self.trainer_id}] Mantenint cerca de models acceptats...")
@@ -323,6 +329,8 @@ class ModelTrainerEngine:
             self.api.add_event(run_id, "model_training_completed", f"El model acceptat {proposal_id} s'ha entrenat.", {"metrics": metrics})
             print("✅ API: event model_training_completed enviat")
 
+            self._update_champion_selection(run_id)
+
         except Exception as e:
             err_msg = str(e)
             print(f"⚠️ Fallada catastròfica entrenant {proposal_id}: {err_msg}")
@@ -337,3 +345,165 @@ class ModelTrainerEngine:
                 self.api.add_event(run_id, "model_training_failed", f"Error a l'entrenar {proposal_id}", {"error": err_msg})
             except Exception as event_error:
                 print(f"⚠️ API: no s'ha pogut enviar event failed ({event_error})")
+
+    def _update_champion_selection(self, run_id: str) -> None:
+        try:
+            proposals = self.api.list_model_proposals(limit=600)
+        except Exception as error:
+            print(f"⚠️ Champion: no s'ha pogut carregar proposals ({error})")
+            return
+
+        scoped: list[dict[str, Any]] = []
+        for proposal in proposals:
+            if not isinstance(proposal, dict):
+                continue
+            if self.champion_scope == "run" and str(proposal.get("source_run_id", "")).strip() != run_id:
+                continue
+            scoped.append(proposal)
+
+        evaluated: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        for proposal in scoped:
+            decision = evaluate_reference_candidate(proposal, config=self.selection_policy_config)
+            if bool(decision.get("eligible")):
+                evaluated.append((proposal, decision))
+
+        if len(evaluated) == 0:
+            try:
+                self.api.add_event(
+                    run_id,
+                    "champion_selection_skipped",
+                    "Cap candidat elegible per champion",
+                    {
+                        "scope": self.champion_scope,
+                        "policy_version": self.selection_policy_config.get("policy_version", "selection_policy_v1"),
+                    },
+                )
+            except Exception:
+                pass
+            return
+
+        evaluated.sort(key=lambda item: float(item[1].get("score", 0.0)), reverse=True)
+        best_proposal, best_decision = evaluated[0]
+        best_score = float(best_decision.get("score", 0.0))
+
+        champion_min_score = float(self.selection_policy_config.get("champion_min_score", 45.0))
+        if best_score < champion_min_score:
+            try:
+                self.api.add_event(
+                    run_id,
+                    "champion_selection_skipped",
+                    "Millor score per sota del minim de champion",
+                    {
+                        "scope": self.champion_scope,
+                        "best_proposal_id": best_proposal.get("proposal_id"),
+                        "best_score": best_score,
+                        "champion_min_score": champion_min_score,
+                    },
+                )
+            except Exception:
+                pass
+            return
+
+        current_champion_proposal: dict[str, Any] | None = None
+        current_champion_decision: dict[str, Any] | None = None
+        for proposal, decision in evaluated:
+            metadata_raw = proposal.get("llm_metadata")
+            metadata = metadata_raw if isinstance(metadata_raw, dict) else {}
+            if bool(metadata.get("champion_active")):
+                current_champion_proposal = proposal
+                current_champion_decision = decision
+                break
+
+        champion_margin_min = float(self.selection_policy_config.get("champion_margin_min", 2.0))
+        if current_champion_proposal is not None and current_champion_decision is not None:
+            current_id = str(current_champion_proposal.get("proposal_id", "")).strip()
+            best_id = str(best_proposal.get("proposal_id", "")).strip()
+            current_score = float(current_champion_decision.get("score", 0.0))
+            if best_id != current_id and (best_score - current_score) < champion_margin_min:
+                try:
+                    self.api.add_event(
+                        run_id,
+                        "champion_kept",
+                        "Champion actual mantingut per marge insuficient",
+                        {
+                            "scope": self.champion_scope,
+                            "current_champion_id": current_id,
+                            "current_score": current_score,
+                            "best_candidate_id": best_id,
+                            "best_score": best_score,
+                            "margin_required": champion_margin_min,
+                        },
+                    )
+                except Exception:
+                    pass
+                return
+
+        best_id = str(best_proposal.get("proposal_id", "")).strip()
+        best_status = str(best_proposal.get("status", "")).strip()
+        if best_id == "" or best_status == "":
+            return
+
+        if current_champion_proposal is not None:
+            current_id = str(current_champion_proposal.get("proposal_id", "")).strip()
+            current_status = str(current_champion_proposal.get("status", "")).strip()
+            if current_id != "" and current_id != best_id and current_status != "":
+                try:
+                    self.api.update_proposal_status(
+                        current_id,
+                        current_status,
+                        {
+                            "champion_active": False,
+                            "champion_replaced_by": best_id,
+                        },
+                    )
+                except Exception as error:
+                    print(f"⚠️ Champion: no s'ha pogut desactivar champion anterior ({error})")
+
+        champion_metadata = {
+            "champion_active": True,
+            "champion_scope": self.champion_scope,
+            "champion_policy_version": str(self.selection_policy_config.get("policy_version", "selection_policy_v1")),
+            "champion_score": best_score,
+            "champion_selection_reason": str(best_decision.get("selection_reason", "")),
+            "champion_score_breakdown": best_decision.get("score_breakdown", {}),
+            "champion_source_run_id": str(best_proposal.get("source_run_id", "")),
+        }
+
+        try:
+            self.api.update_proposal_status(best_id, best_status, champion_metadata)
+        except Exception as error:
+            print(f"⚠️ Champion: no s'ha pogut marcar champion ({error})")
+            return
+
+        champion_uri = f"champion://{self.champion_scope}/{best_id}"
+        try:
+            self.api.add_artifact(
+                run_id,
+                artifact_type="champion_model",
+                uri=champion_uri,
+                storage="local",
+                metadata={
+                    "proposal_id": best_id,
+                    "scope": self.champion_scope,
+                    "score": best_score,
+                    "policy_version": self.selection_policy_config.get("policy_version", "selection_policy_v1"),
+                },
+            )
+        except Exception as error:
+            print(f"⚠️ Champion: no s'ha pogut registrar artifact champion ({error})")
+
+        try:
+            self.api.add_event(
+                run_id,
+                "champion_selected",
+                f"Champion seleccionat: {best_id}",
+                {
+                    "scope": self.champion_scope,
+                    "proposal_id": best_id,
+                    "score": best_score,
+                    "selection_reason": best_decision.get("selection_reason", ""),
+                    "policy_version": self.selection_policy_config.get("policy_version", "selection_policy_v1"),
+                },
+            )
+        except Exception:
+            pass

@@ -1,5 +1,10 @@
 # Selection Policy v1
 
+Status:
+
+- Baseline contract (kept for historical continuity).
+- For current implementation with champion and context profiles, see `selection_policy_v1_1.md`.
+
 This document defines a deterministic and auditable policy for selecting reference models for the next LLM generation cycle.
 
 ## Goal

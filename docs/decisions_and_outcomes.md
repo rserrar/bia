@@ -111,3 +111,20 @@ Que esperem obtenir:
 
 - Seleccio repetible i explicable.
 - Millor control de regressions en iteracions automatiques.
+
+## 8) Selection Policy v1.1 (champion + context)
+
+Que hem fet:
+
+- Hem afegit perfils de policy (`small_test`, `real_large`, `default`).
+- Hem afegit logica de champion amb marge de reemplaçament i score minim.
+
+Per que:
+
+- El mateix threshold no es representatiu entre proves petites i dataset real.
+- Sense champion explicit no hi havia govern clar de "millor model".
+
+Que esperem obtenir:
+
+- Continuïtat de qualitat entre cicles.
+- Menys canvis de champion inestables (flapping) i millor audibilitat.

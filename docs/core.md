@@ -26,6 +26,7 @@ L'objectiu practic actual es executar cicles curts, repetibles i auditables on e
 - `roadmap.md`: estat de fases i outcomes esperats.
 - `structure.md`: estructura actual i politica documental.
 - `selection_policy_v1.md`: contracte de scoring/promocio/traçabilitat per seleccio de referencies.
+- `selection_policy_v1_1.md`: champion selection i perfils de thresholds per context.
 - `server_api.md`: contractes i comportament real d'endpoints.
 - `operations.md`: arrencada, parada i scripts operatius.
 - `observability.md`: visibilitat runtime i interpretacio rapida.
@@ -59,6 +60,10 @@ Per estructura i politica de documentacio:
 Per contracte de seleccio i relacio policy <-> LLM:
 
 <selection_policy_v1>
+
+Per extensio v1.1 amb champion i context profiles:
+
+<selection_policy_v1_1>
 
 Per entendre el contracte real de l'API i metadades de proposals:
 

@@ -11,3 +11,4 @@ Punt d'entrada unificat de documentacio V2.
 - Roadmap: `roadmap.md`
 - Estructura: `structure.md`
 - Selection policy: `selection_policy_v1.md`
+- Selection policy v1.1: `selection_policy_v1_1.md`

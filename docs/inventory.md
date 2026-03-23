@@ -11,6 +11,7 @@ Aquesta carpeta `docs/` es el punt d'entrada unificat.
 - `docs/roadmap.md`
 - `docs/structure.md`
 - `docs/selection_policy_v1.md`
+- `docs/selection_policy_v1_1.md`
 - `docs/server_api.md`
 - `docs/operations.md`
 - `docs/observability.md`

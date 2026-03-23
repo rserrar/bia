@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from shared.utils.selection_policy import default_policy_config, evaluate_reference_candidate
+from shared.utils.selection_policy import evaluate_reference_candidate, load_policy_config_from_env
 
 try:
     from .api_client import ApiClient
@@ -202,7 +202,7 @@ class EvolutionWorkerEngine:
         references: list[dict[str, object]] = []
         selected_trace: list[dict[str, Any]] = []
         rejected_trace: list[dict[str, Any]] = []
-        policy = default_policy_config()
+        policy = load_policy_config_from_env()
         try:
             proposals = self.api.list_model_proposals(limit=300)
             ranked: list[tuple[float, dict[str, object], dict[str, Any]]] = []

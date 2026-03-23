@@ -69,11 +69,11 @@ def main() -> int:
     repo = _repo_root()
     if str(repo) not in sys.path:
         sys.path.insert(0, str(repo))
-    from shared.utils.selection_policy import default_policy_config, evaluate_reference_candidate
+    from shared.utils.selection_policy import evaluate_reference_candidate, load_policy_config_from_env
 
     payload = _request_json(api_base_url, f"/model-proposals?limit={max(1, limit)}", token)
     proposals = [p for p in payload.get("model_proposals", []) if isinstance(p, dict)]
-    policy = default_policy_config()
+    policy = load_policy_config_from_env()
 
     evaluated = [evaluate_reference_candidate(p, config=policy) for p in proposals]
     eligible = [e for e in evaluated if bool(e.get("eligible"))]
@@ -82,6 +82,9 @@ def main() -> int:
 
     output = {
         "policy_version": policy.get("policy_version"),
+        "policy_profile": policy.get("profile"),
+        "champion_min_score": policy.get("champion_min_score"),
+        "champion_margin_min": policy.get("champion_margin_min"),
         "candidates": len(evaluated),
         "eligible": len(eligible),
         "rejected": len(rejected),
