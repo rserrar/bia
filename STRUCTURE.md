@@ -7,6 +7,15 @@ V2/
   ARCHITECTURE.md
   COMPONENTS.md
   ROADMAP.md
+  docs/
+    README.md
+    core.md
+    runtime_flow.md
+    server_api.md
+    operations.md
+    observability.md
+    errors.md
+    inventory.md
 
   colab-worker/
     src/

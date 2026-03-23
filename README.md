@@ -32,6 +32,11 @@ V2/
 
 ## Documentació inclosa
 
+Punt d'entrada recomanat (unificat):
+
+- `docs/core.md`
+- `docs/inventory.md`
+
 - `ARCHITECTURE.md`: arquitectura tècnica global i decisions de disseny
 - `COMPONENTS.md`: responsabilitats i interfícies de cada component
 - `ROADMAP.md`: pla d'implementació per fases
