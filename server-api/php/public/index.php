@@ -261,7 +261,7 @@ try {
     if ($method === 'POST' && count($parts) === 3 && $parts[0] === 'model-proposals' && $parts[2] === 'status') {
         $body = jsonInput();
         $metadataUpdates = is_array($body['metadata_updates'] ?? null) ? $body['metadata_updates'] : [];
-        respond(200, $service->updateModelProposalStatus($parts[1], (string) ($body['status'] ?? ''), $metadataUpdates));
+        respond(200, $service->updateProposalStatus($parts[1], (string) ($body['status'] ?? ''), $metadataUpdates));
     }
 
     if ($method === 'POST' && count($parts) === 3 && $parts[0] === 'model-proposals' && $parts[2] === 'enqueue-phase0') {
