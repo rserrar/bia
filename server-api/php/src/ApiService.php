@@ -270,12 +270,16 @@ final class ApiService
         throw new RuntimeException('proposal not found');
     }
 
-    public function updateModelProposalStatus(string $proposalId, string $status): array
+    public function updateModelProposalStatus(string $proposalId, string $status, array $metadataUpdates = []): array
     {
         $this->assertProposalStatus($status);
         $proposal = $this->getModelProposal($proposalId);
         $proposal['status'] = $status;
         $proposal['updated_at'] = $this->nowIso();
+        if (!empty($metadataUpdates)) {
+            $currentMetadata = is_array($proposal['llm_metadata'] ?? null) ? $proposal['llm_metadata'] : [];
+            $proposal['llm_metadata'] = array_merge($currentMetadata, $metadataUpdates);
+        }
         $this->store->replaceModelProposal($proposalId, $proposal);
         return $proposal;
     }
