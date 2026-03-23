@@ -10,6 +10,8 @@ Aquesta carpeta `docs/` es el punt d'entrada unificat.
 - `docs/operations.md`
 - `docs/observability.md`
 - `docs/errors.md`
+- `docs/decisions_and_outcomes.md`
+- `docs/coverage_audit.md`
 - `docs/inventory.md`
 
 ## Existing project docs preserved

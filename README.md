@@ -36,6 +36,12 @@ Punt d'entrada recomanat (unificat):
 
 - `docs/core.md`
 - `docs/inventory.md`
+- `docs/decisions_and_outcomes.md`
+- `docs/coverage_audit.md`
+
+Nota de migracio documental:
+
+- Els `.md` antics es mantenen de moment com a referencia fins completar cobertura 1:1 al hub centralitzat.
 
 - `ARCHITECTURE.md`: arquitectura tècnica global i decisions de disseny
 - `COMPONENTS.md`: responsabilitats i interfícies de cada component

@@ -1,54 +1,64 @@
 # V2 Documentation Core
 
-La V2 es una plataforma distribuida per generar, validar i entrenar models de forma automatitzada amb tres peces: worker (Colab), API PHP i monitor/ops.
+La V2 es una plataforma distribuida per generar, validar i entrenar models de forma automatitzada amb tres peces: worker (Colab), API PHP i capa d'operacio/monitoratge.
 
-L'objectiu practic es mantenir cicles curts i repetibles on es pugui:
+L'objectiu practic actual es executar cicles curts, repetibles i auditables on es pugui:
 
-- generar propuestas (LLM o seed),
-- entrenarlas,
-- guardar artefactos,
-- i traçar en quin context es va generar cada proposta.
+- generar propostes (LLM o seed bootstrap),
+- entrenar-les,
+- guardar artifacts,
+- i traçar exactament en quin context es va crear cada model.
 
 ## General flow
 
 1. El worker crea o recupera `run`.
-2. Si no hi ha propostes i bootstrap esta activat, crea un seed model.
+2. Si no hi ha propostes i el bootstrap esta actiu, crea una proposta seed.
 3. El worker genera propostes LLM per generacio i les envia a phase0.
-4. El trainer pren propostes, les entrena i publica events, metrics i artifacts.
-5. El monitor/API permet consultar estat, propostes, events i metadades finals.
+4. El trainer bloqueja propostes, entrena i publica events/metrics/artifacts.
+5. L'API i el monitor permeten inspeccionar estat, metadades i resultats finals.
 
 ## Skill structure
 
-- `core.md`: visio global, flux i mapa de coneixement.
-- `runtime_flow.md`: flux operatiu curt per proves (Colab/API).
+- `core.md`: visio global i mapa de navegacio.
+- `runtime_flow.md`: flux curt executable de proves.
 - `server_api.md`: contractes i comportament real d'endpoints.
-- `operations.md`: comandes/scripts recomanats per operar.
-- `observability.md`: on mirar estat, logs i artefactes.
-- `errors.md`: errors reals ja vistos i diagnostic.
-- `inventory.md`: inventari de tots els `.md` actuals del repo V2.
+- `operations.md`: arrencada, parada i scripts operatius.
+- `observability.md`: visibilitat runtime i interpretacio rapida.
+- `errors.md`: incidencies reals i patrons de resolucio.
+- `decisions_and_outcomes.md`: que hem canviat, per que i que esperem obtenir.
+- `coverage_audit.md`: comparativa originals vs hub centralitzat.
+- `inventory.md`: inventari complet dels `.md` del repo.
 
 ## Detail and navigation
 
-Per operar en proves curtes (5-10 minuts) i validar pipeline complet:
+Per executar en fase de proves (5-10 minuts):
 
 <runtime_flow>
 
-Per entendre detalls de rutes/API, prefixes i metadades persistides:
+Per entendre el contracte real de l'API i metadades de proposals:
 
 <server_api>
 
-Per estandarditzar arrencada/aturada i scripts P0:
+Per operar scripts P0 en local/Colab:
 
 <operations>
 
-Per observar progres real en execucio (events/artifacts/proposals):
+Per veure progres real de run/proposals/training:
 
 <observability>
 
-Per resoldre incidencies ja conegudes sense repetir debugging:
+Per entendre decisions de fons i resultats esperats:
+
+<decisions_and_outcomes>
+
+Per revisar buits de cobertura abans d'eliminar docs antics:
+
+<coverage_audit>
+
+Per troubleshooting basat en experiencia:
 
 <errors>
 
-Per localitzar tota la documentacio existent i no perdre res:
+Per localitzar tota la documentacio existent:
 
 <inventory>

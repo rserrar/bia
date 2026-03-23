@@ -15,6 +15,8 @@ V2/
     operations.md
     observability.md
     errors.md
+    decisions_and_outcomes.md
+    coverage_audit.md
     inventory.md
 
   colab-worker/
