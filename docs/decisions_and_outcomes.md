@@ -94,3 +94,20 @@ Per que:
 Que esperem obtenir:
 
 - Arrencada automàtica desde zero sense preparacio manual prèvia.
+
+## 7) Selection Policy v1 com a contracte explicit
+
+Que hem fet:
+
+- Hem definit una policy deterministic de seleccio de referencies (`selection_policy_v1`).
+- El ranking ja no depen directament de l'LLM.
+- S'enregistra traçabilitat de seleccio al `prompt_audit`.
+
+Per que:
+
+- El pas de sistema assistit a autoevolutiu requeria criteri auditable, no heuristica opaca.
+
+Que esperem obtenir:
+
+- Seleccio repetible i explicable.
+- Millor control de regressions en iteracions automatiques.

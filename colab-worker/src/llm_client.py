@@ -218,11 +218,16 @@ class LlmProposalClient:
         references = context.get("reference_models")
         ref_count = len([item for item in references if isinstance(item, dict)]) if isinstance(references, list) else 0
         latest_metrics = context.get("latest_metrics") if isinstance(context.get("latest_metrics"), dict) else {}
+        selection_trace = context.get("reference_selection_trace") if isinstance(context.get("reference_selection_trace"), dict) else {}
+        selected_refs = selection_trace.get("selected", []) if isinstance(selection_trace.get("selected", []), list) else []
+        policy_version = str(selection_trace.get("policy_version", "selection_policy_v1"))
         metadata_payload["prompt_audit"] = {
             "generation": int(context.get("generation", 0)),
             "run_id": str(context.get("run_id", "")),
             "code_version": str(context.get("code_version", "")),
             "reference_models_count": ref_count,
+            "reference_policy_version": policy_version,
+            "reference_models_selected": selected_refs,
             "latest_metrics": latest_metrics,
             "prompt_chars": len(prompt_text),
             "prompt_preview": prompt_text[:1000],

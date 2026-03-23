@@ -20,6 +20,7 @@ Document de desplegament real:
 - `scripts/probe_openai_models.py`: comprova models disponibles i headers de rate-limit
 - `scripts/run_llm_full_prompt_check.py`: valida prompt complet (mode sec o amb enviament LLM/API)
 - `scripts/run_generated_proposals_compile_check.py`: compila propostes d'un `run_id` i reporta errors de schema
+- `scripts/preview_selection_policy.py`: calcula ranking deterministic de models segons Selection Policy v1
 - `scripts/p0_health_check.py`: comprovació P0 (API reachable, cues pendents encallades, resum PASS/FAIL)
 - `scripts/run_trainer_supervisor.py`: manté `run_trainer.py` actiu amb auto-restart i health check cada 5 minuts
 - `scripts/run_e2e_final_smoke.py`: prova E2E final automàtica (trial LLM + trainer + validació trained/artifacts/metadata)

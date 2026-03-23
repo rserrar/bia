@@ -6,6 +6,9 @@ import json
 import copy
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
+
+from shared.utils.selection_policy import default_policy_config, evaluate_reference_candidate
 
 try:
     from .api_client import ApiClient
@@ -139,7 +142,9 @@ class EvolutionWorkerEngine:
             "latest_metrics": metrics,
             "code_version": self.config.code_version,
         }
-        context["reference_models"] = self._collect_reference_models_for_prompt(run_id)
+        reference_models, reference_trace = self._collect_reference_models_for_prompt(run_id)
+        context["reference_models"] = reference_models
+        context["reference_selection_trace"] = reference_trace
         try:
             self.last_llm_call_ts = time.time()
             print("🤖 Fent petició al LLM per generar una nova proposta. Espera si us plau...")
@@ -189,51 +194,58 @@ class EvolutionWorkerEngine:
                 {"error": str(error)},
             )
 
-    def _collect_reference_models_for_prompt(self, run_id: str) -> list[dict[str, object]]:
+    def _collect_reference_models_for_prompt(self, run_id: str) -> tuple[list[dict[str, object]], dict[str, Any]]:
         max_refs = max(0, int(self.config.llm_num_reference_models))
         if max_refs <= 0:
-            return []
+            return [], {"policy_version": "selection_policy_v1", "selected": [], "rejected": []}
 
         references: list[dict[str, object]] = []
+        selected_trace: list[dict[str, Any]] = []
+        rejected_trace: list[dict[str, Any]] = []
+        policy = default_policy_config()
         try:
             proposals = self.api.list_model_proposals(limit=300)
-            ranked: list[tuple[float, dict[str, object]]] = []
+            ranked: list[tuple[float, dict[str, object], dict[str, Any]]] = []
             for proposal in proposals:
-                status = str(proposal.get("status", "")).strip()
-                if status not in {"trained", "accepted", "validated_phase0"}:
-                    continue
                 payload = proposal.get("proposal")
                 if not isinstance(payload, dict):
                     continue
                 model_definition = payload.get("model_definition")
                 if not isinstance(model_definition, dict):
                     continue
-                llm_metadata_raw = proposal.get("llm_metadata")
-                llm_metadata: dict[str, object] = llm_metadata_raw if isinstance(llm_metadata_raw, dict) else {}
-                training_kpis_raw = llm_metadata.get("training_kpis")
-                kpi_eval_raw = llm_metadata.get("kpi_evaluation")
-                training_kpis: dict[str, object] = training_kpis_raw if isinstance(training_kpis_raw, dict) else {}
-                kpi_eval: dict[str, object] = kpi_eval_raw if isinstance(kpi_eval_raw, dict) else {}
-                val_loss: object = training_kpis.get("val_loss_total", kpi_eval.get("val_loss_total", 9999))
-                if isinstance(val_loss, (int, float, str)):
-                    try:
-                        score = float(val_loss)
-                    except Exception:
-                        score = 9999.0
-                else:
-                    score = 9999.0
+                decision = evaluate_reference_candidate(proposal, config=policy)
+                if not bool(decision.get("eligible")):
+                    rejected_trace.append(
+                        {
+                            "proposal_id": str(proposal.get("proposal_id", "")),
+                            "status": str(proposal.get("status", "")),
+                            "selection_reason": str(decision.get("selection_reason", "")),
+                            "constraints_failed": decision.get("constraints_failed", []),
+                            "score": decision.get("score"),
+                        }
+                    )
+                    continue
+                score = float(decision.get("score", 0.0))
                 reference: dict[str, object] = dict(model_definition)
                 reference["model_id"] = str(model_definition.get("model_id", proposal.get("proposal_id", "unknown_model")))
-                reference["reference_status"] = status
+                reference["reference_status"] = str(proposal.get("status", ""))
                 reference["reference_source_run_id"] = str(proposal.get("source_run_id", ""))
-                reference["last_evaluation_metrics_summary"] = {
-                    "val_loss_total": score,
-                    "training_kpis": training_kpis,
-                    "kpi_evaluation": kpi_eval,
+                reference["selection_score"] = score
+                reference["selection_reason"] = str(decision.get("selection_reason", ""))
+                reference["score_breakdown"] = decision.get("score_breakdown", {})
+                ranked.append((score, reference, decision))
+            ranked.sort(key=lambda item: item[0], reverse=True)
+            top = ranked[:max_refs]
+            references = [item[1] for item in top]
+            selected_trace = [
+                {
+                    "proposal_id": str(item[2].get("proposal_id", "")),
+                    "score": item[2].get("score"),
+                    "selection_reason": item[2].get("selection_reason", ""),
+                    "score_breakdown": item[2].get("score_breakdown", {}),
                 }
-                ranked.append((score, reference))
-            ranked.sort(key=lambda item: item[0])
-            references = [item[1] for item in ranked[:max_refs]]
+                for item in top
+            ]
         except Exception:
             references = []
 
@@ -245,10 +257,26 @@ class EvolutionWorkerEngine:
                         run_id,
                         "llm_reference_models_fallback",
                         "S'han usat models de referència locals per al prompt",
-                        {"count": len(fallback)},
+                        {"count": len(fallback), "reason": "no_eligible_ranked_models"},
                     )
-                return fallback
-        return references
+                return fallback, {
+                    "policy_version": str(policy.get("policy_version", "selection_policy_v1")),
+                    "selected": [
+                        {
+                            "proposal_id": "local_seed",
+                            "score": None,
+                            "selection_reason": "local_fallback",
+                        }
+                    ],
+                    "rejected": rejected_trace[:10],
+                    "fallback_used": True,
+                }
+        return references, {
+            "policy_version": str(policy.get("policy_version", "selection_policy_v1")),
+            "selected": selected_trace,
+            "rejected": rejected_trace[:10],
+            "fallback_used": False,
+        }
 
     def _load_reference_models_from_file(self, max_refs: int) -> list[dict[str, object]]:
         path_str = os.getenv("V2_PROMPT_REFERENCE_MODEL_PATH", "models/base/model_exemple_complex_v1.json").strip()

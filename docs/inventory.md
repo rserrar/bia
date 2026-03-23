@@ -10,6 +10,7 @@ Aquesta carpeta `docs/` es el punt d'entrada unificat.
 - `docs/components.md`
 - `docs/roadmap.md`
 - `docs/structure.md`
+- `docs/selection_policy_v1.md`
 - `docs/server_api.md`
 - `docs/operations.md`
 - `docs/observability.md`

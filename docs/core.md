@@ -25,6 +25,7 @@ L'objectiu practic actual es executar cicles curts, repetibles i auditables on e
 - `components.md`: responsabilitats i limits de cada component.
 - `roadmap.md`: estat de fases i outcomes esperats.
 - `structure.md`: estructura actual i politica documental.
+- `selection_policy_v1.md`: contracte de scoring/promocio/traçabilitat per seleccio de referencies.
 - `server_api.md`: contractes i comportament real d'endpoints.
 - `operations.md`: arrencada, parada i scripts operatius.
 - `observability.md`: visibilitat runtime i interpretacio rapida.
@@ -54,6 +55,10 @@ Per estat de fases i orientacio propera:
 Per estructura i politica de documentacio:
 
 <structure>
+
+Per contracte de seleccio i relacio policy <-> LLM:
+
+<selection_policy_v1>
 
 Per entendre el contracte real de l'API i metadades de proposals:
 

@@ -38,3 +38,7 @@ Objectiu: comprovar cobertura 1:1 entre docs originals i hub centralitzat abans/
 Per tenir absolutament tota la documentacio sota `docs/`, caldria migrar tambe els fitxers de tracking viu d'`ops/` i deixar alias curts.
 
 Avui no s'ha fet per evitar trencar el flux operatiu durant proves.
+
+## New explicit contracts added in hub
+
+- `docs/selection_policy_v1.md` defineix scoring, promocio i traçabilitat independent del LLM.

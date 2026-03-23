@@ -42,6 +42,7 @@ Punt d'entrada recomanat (unificat):
 - `docs/components.md`
 - `docs/roadmap.md`
 - `docs/structure.md`
+- `docs/selection_policy_v1.md`
 
 ## Estat actual
 

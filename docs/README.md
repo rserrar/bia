@@ -10,3 +10,4 @@ Punt d'entrada unificat de documentacio V2.
 - Components: `components.md`
 - Roadmap: `roadmap.md`
 - Estructura: `structure.md`
+- Selection policy: `selection_policy_v1.md`
