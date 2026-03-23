@@ -172,6 +172,298 @@ function buildStore()
     return new StateStore($stateFile);
 }
 
+function toFloatOrNull($value): ?float
+{
+    if (is_bool($value)) {
+        return null;
+    }
+    if (is_int($value) || is_float($value)) {
+        return (float) $value;
+    }
+    if (!is_string($value)) {
+        return null;
+    }
+    $trimmed = trim($value);
+    if ($trimmed === '') {
+        return null;
+    }
+    if (!is_numeric($trimmed)) {
+        return null;
+    }
+    return (float) $trimmed;
+}
+
+function policyConfigForProfile(string $profile): array
+{
+    $selected = strtolower(trim($profile));
+    $base = [
+        'policy_version' => 'selection_policy_v1',
+        'profile' => 'default',
+        'weights' => [
+            'loss' => 0.55,
+            'time' => 0.15,
+            'stability' => 0.20,
+            'quality' => 0.10,
+        ],
+        'loss_cap' => 200000.0,
+        'time_cap_seconds' => 1800.0,
+        'hard_time_limit_seconds' => 3600.0,
+        'champion_min_score' => 45.0,
+        'champion_margin_min' => 2.0,
+    ];
+
+    if (in_array($selected, ['small', 'small_test', 'test'], true)) {
+        $base['profile'] = 'small_test';
+        $base['weights'] = [
+            'loss' => 0.50,
+            'time' => 0.20,
+            'stability' => 0.20,
+            'quality' => 0.10,
+        ];
+        $base['loss_cap'] = 300000.0;
+        $base['time_cap_seconds'] = 900.0;
+        $base['hard_time_limit_seconds'] = 1800.0;
+        $base['champion_min_score'] = 35.0;
+        $base['champion_margin_min'] = 1.0;
+        return $base;
+    }
+
+    if (in_array($selected, ['real', 'large', 'real_large', 'prod'], true)) {
+        $base['profile'] = 'real_large';
+        $base['weights'] = [
+            'loss' => 0.65,
+            'time' => 0.05,
+            'stability' => 0.20,
+            'quality' => 0.10,
+        ];
+        $base['loss_cap'] = 200000.0;
+        $base['time_cap_seconds'] = 7200.0;
+        $base['hard_time_limit_seconds'] = 14400.0;
+        $base['champion_min_score'] = 50.0;
+        $base['champion_margin_min'] = 3.0;
+        return $base;
+    }
+
+    return $base;
+}
+
+function evaluateProposalSelection(array $proposal, array $policy): array
+{
+    $status = (string) ($proposal['status'] ?? '');
+    $proposalId = (string) ($proposal['proposal_id'] ?? '');
+    $sourceRunId = (string) ($proposal['source_run_id'] ?? '');
+    $llmMetadata = is_array($proposal['llm_metadata'] ?? null) ? $proposal['llm_metadata'] : [];
+    $trainingKpis = is_array($llmMetadata['training_kpis'] ?? null) ? $llmMetadata['training_kpis'] : [];
+    $kpiEval = is_array($llmMetadata['kpi_evaluation'] ?? null) ? $llmMetadata['kpi_evaluation'] : [];
+    $kpiResult = (string) ($llmMetadata['kpi_result'] ?? '');
+
+    $valLoss = toFloatOrNull($trainingKpis['val_loss_total'] ?? null);
+    if ($valLoss === null) {
+        $valLoss = toFloatOrNull($kpiEval['val_loss_total'] ?? null);
+    }
+    $trainingTime = toFloatOrNull($trainingKpis['training_time_seconds'] ?? null);
+    if ($trainingTime === null) {
+        $trainingTime = toFloatOrNull($llmMetadata['training_time'] ?? null);
+    }
+
+    $constraintsFailed = [];
+    $allowedStatuses = ['trained', 'accepted', 'validated_phase0'];
+    if (!in_array($status, $allowedStatuses, true)) {
+        $constraintsFailed[] = 'status_not_allowed';
+    }
+    if ($valLoss === null) {
+        $constraintsFailed[] = 'missing_val_loss_total';
+    }
+    if ($kpiResult === 'rejected_by_loss') {
+        $constraintsFailed[] = 'kpi_rejected';
+    }
+
+    $weights = is_array($policy['weights'] ?? null) ? $policy['weights'] : [];
+    $wLoss = (float) ($weights['loss'] ?? 0.55);
+    $wTime = (float) ($weights['time'] ?? 0.15);
+    $wStability = (float) ($weights['stability'] ?? 0.20);
+    $wQuality = (float) ($weights['quality'] ?? 0.10);
+    $lossCap = (float) ($policy['loss_cap'] ?? 200000.0);
+    $timeCap = (float) ($policy['time_cap_seconds'] ?? 1800.0);
+    $hardTime = (float) ($policy['hard_time_limit_seconds'] ?? 3600.0);
+
+    $normalizedLoss = 0.0;
+    if ($valLoss !== null && $lossCap > 0) {
+        $normalizedLoss = max(0.0, 1.0 - min($valLoss, $lossCap) / $lossCap);
+    }
+
+    $normalizedTime = 0.5;
+    if ($trainingTime !== null && $timeCap > 0) {
+        $normalizedTime = max(0.0, 1.0 - min($trainingTime, $timeCap) / $timeCap);
+    }
+
+    if ($status === 'trained') {
+        $normalizedStability = 1.0;
+    } elseif ($status === 'accepted') {
+        $normalizedStability = 0.75;
+    } else {
+        $normalizedStability = 0.55;
+    }
+
+    if ($kpiResult === 'promoted') {
+        $normalizedQuality = 1.0;
+    } elseif ($kpiResult === '') {
+        $normalizedQuality = 0.7;
+    } else {
+        $normalizedQuality = 0.5;
+    }
+
+    $rawScore = 100.0 * (
+        $wLoss * $normalizedLoss
+        + $wTime * $normalizedTime
+        + $wStability * $normalizedStability
+        + $wQuality * $normalizedQuality
+    );
+
+    $penalties = [];
+    $finalScore = $rawScore;
+    if ($trainingTime !== null && $trainingTime > $hardTime) {
+        $penalties[] = ['name' => 'hard_time_limit', 'points' => 15.0];
+        $finalScore -= 15.0;
+    }
+    $finalScore = max(0.0, round($finalScore, 4));
+
+    $eligible = count($constraintsFailed) === 0;
+    if (!$eligible) {
+        $selectionReason = 'ineligible_due_to_constraints';
+    } elseif ($status === 'trained') {
+        $selectionReason = 'eligible_trained_candidate';
+    } else {
+        $selectionReason = 'eligible_pretrained_candidate';
+    }
+
+    return [
+        'proposal_id' => $proposalId,
+        'source_run_id' => $sourceRunId,
+        'status' => $status,
+        'eligible' => $eligible,
+        'score' => $finalScore,
+        'selection_reason' => $selectionReason,
+        'constraints_failed' => $constraintsFailed,
+        'score_breakdown' => [
+            'raw_score' => round($rawScore, 4),
+            'normalized' => [
+                'loss' => round($normalizedLoss, 6),
+                'time' => round($normalizedTime, 6),
+                'stability' => round($normalizedStability, 6),
+                'quality' => round($normalizedQuality, 6),
+            ],
+            'penalties' => $penalties,
+            'metrics_used' => [
+                'val_loss_total' => $valLoss,
+                'training_time_seconds' => $trainingTime,
+                'kpi_result' => $kpiResult,
+            ],
+        ],
+    ];
+}
+
+function buildChampionBoard(array $proposals, array $runs, array $policy): array
+{
+    $latestRunId = '';
+    if (count($runs) > 0) {
+        $latestRunId = (string) ($runs[0]['run_id'] ?? '');
+    }
+
+    $evaluatedGlobal = [];
+    foreach ($proposals as $proposal) {
+        if (!is_array($proposal)) {
+            continue;
+        }
+        $decision = evaluateProposalSelection($proposal, $policy);
+        if ((bool) ($decision['eligible'] ?? false)) {
+            $evaluatedGlobal[] = ['proposal' => $proposal, 'decision' => $decision];
+        }
+    }
+    usort($evaluatedGlobal, static function (array $a, array $b): int {
+        return ((float) ($b['decision']['score'] ?? 0.0)) <=> ((float) ($a['decision']['score'] ?? 0.0));
+    });
+
+    $globalActive = null;
+    foreach ($proposals as $proposal) {
+        if (!is_array($proposal)) {
+            continue;
+        }
+        $metadata = is_array($proposal['llm_metadata'] ?? null) ? $proposal['llm_metadata'] : [];
+        if (($metadata['champion_active'] ?? false) === true && (string) ($metadata['champion_scope'] ?? '') === 'global') {
+            $globalActive = $proposal;
+            break;
+        }
+    }
+
+    $globalChampion = null;
+    if ($globalActive !== null) {
+        foreach ($evaluatedGlobal as $entry) {
+            if ((string) ($entry['proposal']['proposal_id'] ?? '') === (string) ($globalActive['proposal_id'] ?? '')) {
+                $globalChampion = $entry;
+                break;
+            }
+        }
+    }
+    if ($globalChampion === null && count($evaluatedGlobal) > 0) {
+        $globalChampion = $evaluatedGlobal[0];
+    }
+
+    $evaluatedRun = [];
+    if ($latestRunId !== '') {
+        foreach ($evaluatedGlobal as $entry) {
+            if ((string) ($entry['proposal']['source_run_id'] ?? '') === $latestRunId) {
+                $evaluatedRun[] = $entry;
+            }
+        }
+    }
+    usort($evaluatedRun, static function (array $a, array $b): int {
+        return ((float) ($b['decision']['score'] ?? 0.0)) <=> ((float) ($a['decision']['score'] ?? 0.0));
+    });
+
+    $runActive = null;
+    foreach ($proposals as $proposal) {
+        if (!is_array($proposal) || $latestRunId === '') {
+            continue;
+        }
+        if ((string) ($proposal['source_run_id'] ?? '') !== $latestRunId) {
+            continue;
+        }
+        $metadata = is_array($proposal['llm_metadata'] ?? null) ? $proposal['llm_metadata'] : [];
+        if (($metadata['champion_active'] ?? false) === true && (string) ($metadata['champion_scope'] ?? '') === 'run') {
+            $runActive = $proposal;
+            break;
+        }
+    }
+
+    $runChampion = null;
+    if ($runActive !== null) {
+        foreach ($evaluatedRun as $entry) {
+            if ((string) ($entry['proposal']['proposal_id'] ?? '') === (string) ($runActive['proposal_id'] ?? '')) {
+                $runChampion = $entry;
+                break;
+            }
+        }
+    }
+    if ($runChampion === null && count($evaluatedRun) > 0) {
+        $runChampion = $evaluatedRun[0];
+    }
+
+    $topN = 5;
+    $globalTop = array_slice($evaluatedGlobal, 0, $topN + 1);
+    $runTop = array_slice($evaluatedRun, 0, $topN + 1);
+
+    return [
+        'latest_run_id' => $latestRunId,
+        'policy_version' => (string) ($policy['policy_version'] ?? 'selection_policy_v1'),
+        'policy_profile' => (string) ($policy['profile'] ?? 'default'),
+        'champion_global' => $globalChampion,
+        'champion_run' => $runChampion,
+        'global_top' => $globalTop,
+        'run_top' => $runTop,
+    ];
+}
+
 loadDotEnvFiles([
     getenv('V2_DOTENV_PATH') ?: '',
     __DIR__ . '/../.env',
@@ -227,6 +519,9 @@ try {
     $proposals = $service->listModelProposals(100);
     $recentEvents = $service->listEvents(50);
     $recentMetrics = $service->listMetrics(50);
+    $selectionPolicyProfile = envValue('V2_SELECTION_POLICY_PROFILE', 'default');
+    $selectionPolicy = policyConfigForProfile($selectionPolicyProfile);
+    $championBoard = buildChampionBoard($proposals, $runs, $selectionPolicy);
 } catch (Throwable $error) {
     http_response_code(500);
     header('Content-Type: text/plain; charset=utf-8');
@@ -258,6 +553,10 @@ try {
         .status-accepted { color: #86efac; }
         .status-rejected { color: #fca5a5; }
         h2 { margin: 24px 0 12px 0; }
+        .panel { background: #111827; border: 1px solid #1f2937; border-radius: 8px; padding: 12px; margin-bottom: 16px; }
+        .panel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; margin-bottom: 12px; }
+        .kpi { font-size: 13px; color: #cbd5e1; }
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
         form { margin: 0; }
         .toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; }
         .danger { border-color: #ef4444; color: #fecaca; }
@@ -272,6 +571,7 @@ try {
         $evalResult = is_array($_SESSION['eval_result'] ?? null) ? $_SESSION['eval_result'] : null; unset($_SESSION['eval_result']); 
     ?>
     <div class="meta">Actualització automàtica cada 15s · Runs: <?php echo count($runs); ?> · <a href="./monitor.php?logout=1">Sortir</a></div>
+    <div class="meta">Selection policy: <span class="mono"><?php echo htmlspecialchars((string) ($championBoard['policy_version'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span> · profile: <span class="mono"><?php echo htmlspecialchars((string) ($championBoard['policy_profile'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span></div>
     <div class="toolbar">
         <form method="post" action="./monitor.php">
             <input type="hidden" name="action" value="evaluate_kpis">
@@ -290,6 +590,112 @@ try {
             <span class="notice">Models avaluats (KPIs): <?php echo (int) ($evalResult['evaluated_count'] ?? 0); ?></span>
         <?php endif; ?>
     </div>
+
+    <h2>Champion Board</h2>
+    <div class="panel-grid">
+        <?php
+            $runChampionEntry = is_array($championBoard['champion_run'] ?? null) ? $championBoard['champion_run'] : null;
+            $runChampionProposal = is_array($runChampionEntry['proposal'] ?? null) ? $runChampionEntry['proposal'] : [];
+            $runChampionDecision = is_array($runChampionEntry['decision'] ?? null) ? $runChampionEntry['decision'] : [];
+            $runChampionMeta = is_array($runChampionProposal['llm_metadata'] ?? null) ? $runChampionProposal['llm_metadata'] : [];
+        ?>
+        <div class="panel">
+            <h3>Run Champion (latest run)</h3>
+            <div class="kpi">run_id: <span class="mono"><?php echo htmlspecialchars((string) ($championBoard['latest_run_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span></div>
+            <?php if (!empty($runChampionProposal)): ?>
+                <div class="kpi">proposal: <span class="mono"><?php echo htmlspecialchars((string) ($runChampionProposal['proposal_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span></div>
+                <div class="kpi">score: <strong><?php echo htmlspecialchars((string) ($runChampionDecision['score'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></strong></div>
+                <div class="kpi">selection_reason: <?php echo htmlspecialchars((string) ($runChampionDecision['selection_reason'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
+                <div class="kpi">status: <?php echo htmlspecialchars((string) ($runChampionProposal['status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
+                <div class="kpi">policy_version: <span class="mono"><?php echo htmlspecialchars((string) ($runChampionMeta['champion_policy_version'] ?? ($championBoard['policy_version'] ?? '')), ENT_QUOTES, 'UTF-8'); ?></span></div>
+                <?php $runBreakdown = is_array($runChampionDecision['score_breakdown'] ?? null) ? $runChampionDecision['score_breakdown'] : []; ?>
+                <?php $runNorm = is_array($runBreakdown['normalized'] ?? null) ? $runBreakdown['normalized'] : []; ?>
+                <div class="kpi">breakdown: loss=<?php echo htmlspecialchars((string) ($runNorm['loss'] ?? ''), ENT_QUOTES, 'UTF-8'); ?> · time=<?php echo htmlspecialchars((string) ($runNorm['time'] ?? ''), ENT_QUOTES, 'UTF-8'); ?> · stability=<?php echo htmlspecialchars((string) ($runNorm['stability'] ?? ''), ENT_QUOTES, 'UTF-8'); ?> · quality=<?php echo htmlspecialchars((string) ($runNorm['quality'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
+            <?php else: ?>
+                <div class="kpi">No champion for latest run yet.</div>
+            <?php endif; ?>
+        </div>
+
+        <?php
+            $globalChampionEntry = is_array($championBoard['champion_global'] ?? null) ? $championBoard['champion_global'] : null;
+            $globalChampionProposal = is_array($globalChampionEntry['proposal'] ?? null) ? $globalChampionEntry['proposal'] : [];
+            $globalChampionDecision = is_array($globalChampionEntry['decision'] ?? null) ? $globalChampionEntry['decision'] : [];
+            $globalChampionMeta = is_array($globalChampionProposal['llm_metadata'] ?? null) ? $globalChampionProposal['llm_metadata'] : [];
+        ?>
+        <div class="panel">
+            <h3>Global Champion</h3>
+            <?php if (!empty($globalChampionProposal)): ?>
+                <div class="kpi">proposal: <span class="mono"><?php echo htmlspecialchars((string) ($globalChampionProposal['proposal_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span></div>
+                <div class="kpi">score: <strong><?php echo htmlspecialchars((string) ($globalChampionDecision['score'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></strong></div>
+                <div class="kpi">selection_reason: <?php echo htmlspecialchars((string) ($globalChampionDecision['selection_reason'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
+                <div class="kpi">status: <?php echo htmlspecialchars((string) ($globalChampionProposal['status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
+                <div class="kpi">policy_version: <span class="mono"><?php echo htmlspecialchars((string) ($globalChampionMeta['champion_policy_version'] ?? ($championBoard['policy_version'] ?? '')), ENT_QUOTES, 'UTF-8'); ?></span></div>
+                <?php $globalBreakdown = is_array($globalChampionDecision['score_breakdown'] ?? null) ? $globalChampionDecision['score_breakdown'] : []; ?>
+                <?php $globalNorm = is_array($globalBreakdown['normalized'] ?? null) ? $globalBreakdown['normalized'] : []; ?>
+                <div class="kpi">breakdown: loss=<?php echo htmlspecialchars((string) ($globalNorm['loss'] ?? ''), ENT_QUOTES, 'UTF-8'); ?> · time=<?php echo htmlspecialchars((string) ($globalNorm['time'] ?? ''), ENT_QUOTES, 'UTF-8'); ?> · stability=<?php echo htmlspecialchars((string) ($globalNorm['stability'] ?? ''), ENT_QUOTES, 'UTF-8'); ?> · quality=<?php echo htmlspecialchars((string) ($globalNorm['quality'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
+            <?php else: ?>
+                <div class="kpi">No global champion yet.</div>
+            <?php endif; ?>
+        </div>
+    </div>
+
+    <div class="panel-grid">
+        <div class="panel">
+            <h3>Top-N Run Candidates</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Proposal</th>
+                        <th>Status</th>
+                        <th>Score</th>
+                        <th>Reason</th>
+                    </tr>
+                </thead>
+                <tbody>
+                <?php foreach ((array) ($championBoard['run_top'] ?? []) as $entry): ?>
+                    <?php
+                        $proposal = is_array($entry['proposal'] ?? null) ? $entry['proposal'] : [];
+                        $decision = is_array($entry['decision'] ?? null) ? $entry['decision'] : [];
+                    ?>
+                    <tr>
+                        <td><?php echo htmlspecialchars((string) ($proposal['proposal_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                        <td><?php echo htmlspecialchars((string) ($proposal['status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                        <td><?php echo htmlspecialchars((string) ($decision['score'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                        <td><?php echo htmlspecialchars((string) ($decision['selection_reason'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+        <div class="panel">
+            <h3>Top-N Global Candidates</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Proposal</th>
+                        <th>Status</th>
+                        <th>Score</th>
+                        <th>Reason</th>
+                    </tr>
+                </thead>
+                <tbody>
+                <?php foreach ((array) ($championBoard['global_top'] ?? []) as $entry): ?>
+                    <?php
+                        $proposal = is_array($entry['proposal'] ?? null) ? $entry['proposal'] : [];
+                        $decision = is_array($entry['decision'] ?? null) ? $entry['decision'] : [];
+                    ?>
+                    <tr>
+                        <td><?php echo htmlspecialchars((string) ($proposal['proposal_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                        <td><?php echo htmlspecialchars((string) ($proposal['status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                        <td><?php echo htmlspecialchars((string) ($decision['score'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                        <td><?php echo htmlspecialchars((string) ($decision['selection_reason'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
     <table>
         <thead>
             <tr>
