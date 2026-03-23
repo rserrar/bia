@@ -598,6 +598,10 @@ try {
             $runChampionProposal = is_array($runChampionEntry['proposal'] ?? null) ? $runChampionEntry['proposal'] : [];
             $runChampionDecision = is_array($runChampionEntry['decision'] ?? null) ? $runChampionEntry['decision'] : [];
             $runChampionMeta = is_array($runChampionProposal['llm_metadata'] ?? null) ? $runChampionProposal['llm_metadata'] : [];
+            $runChampionPolicyProfile = (string) ($runChampionMeta['champion_policy_profile'] ?? ($championBoard['policy_profile'] ?? ''));
+            $runProfileMismatch = $runChampionPolicyProfile !== ''
+                && (string) ($championBoard['policy_profile'] ?? '') !== ''
+                && $runChampionPolicyProfile !== (string) ($championBoard['policy_profile'] ?? '');
         ?>
         <div class="panel">
             <h3>Run Champion (latest run)</h3>
@@ -608,6 +612,10 @@ try {
                 <div class="kpi">selection_reason: <?php echo htmlspecialchars((string) ($runChampionDecision['selection_reason'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
                 <div class="kpi">status: <?php echo htmlspecialchars((string) ($runChampionProposal['status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
                 <div class="kpi">policy_version: <span class="mono"><?php echo htmlspecialchars((string) ($runChampionMeta['champion_policy_version'] ?? ($championBoard['policy_version'] ?? '')), ENT_QUOTES, 'UTF-8'); ?></span></div>
+                <div class="kpi">policy_profile: <span class="mono"><?php echo htmlspecialchars($runChampionPolicyProfile, ENT_QUOTES, 'UTF-8'); ?></span></div>
+                <?php if ($runProfileMismatch): ?>
+                    <div class="kpi" style="color:#fbbf24;">⚠ profile mismatch (champion=<?php echo htmlspecialchars($runChampionPolicyProfile, ENT_QUOTES, 'UTF-8'); ?>, board=<?php echo htmlspecialchars((string) ($championBoard['policy_profile'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>)</div>
+                <?php endif; ?>
                 <?php $runBreakdown = is_array($runChampionDecision['score_breakdown'] ?? null) ? $runChampionDecision['score_breakdown'] : []; ?>
                 <?php $runNorm = is_array($runBreakdown['normalized'] ?? null) ? $runBreakdown['normalized'] : []; ?>
                 <div class="kpi">breakdown: loss=<?php echo htmlspecialchars((string) ($runNorm['loss'] ?? ''), ENT_QUOTES, 'UTF-8'); ?> · time=<?php echo htmlspecialchars((string) ($runNorm['time'] ?? ''), ENT_QUOTES, 'UTF-8'); ?> · stability=<?php echo htmlspecialchars((string) ($runNorm['stability'] ?? ''), ENT_QUOTES, 'UTF-8'); ?> · quality=<?php echo htmlspecialchars((string) ($runNorm['quality'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
@@ -621,6 +629,10 @@ try {
             $globalChampionProposal = is_array($globalChampionEntry['proposal'] ?? null) ? $globalChampionEntry['proposal'] : [];
             $globalChampionDecision = is_array($globalChampionEntry['decision'] ?? null) ? $globalChampionEntry['decision'] : [];
             $globalChampionMeta = is_array($globalChampionProposal['llm_metadata'] ?? null) ? $globalChampionProposal['llm_metadata'] : [];
+            $globalChampionPolicyProfile = (string) ($globalChampionMeta['champion_policy_profile'] ?? ($championBoard['policy_profile'] ?? ''));
+            $globalProfileMismatch = $globalChampionPolicyProfile !== ''
+                && (string) ($championBoard['policy_profile'] ?? '') !== ''
+                && $globalChampionPolicyProfile !== (string) ($championBoard['policy_profile'] ?? '');
         ?>
         <div class="panel">
             <h3>Global Champion</h3>
@@ -630,6 +642,10 @@ try {
                 <div class="kpi">selection_reason: <?php echo htmlspecialchars((string) ($globalChampionDecision['selection_reason'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
                 <div class="kpi">status: <?php echo htmlspecialchars((string) ($globalChampionProposal['status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
                 <div class="kpi">policy_version: <span class="mono"><?php echo htmlspecialchars((string) ($globalChampionMeta['champion_policy_version'] ?? ($championBoard['policy_version'] ?? '')), ENT_QUOTES, 'UTF-8'); ?></span></div>
+                <div class="kpi">policy_profile: <span class="mono"><?php echo htmlspecialchars($globalChampionPolicyProfile, ENT_QUOTES, 'UTF-8'); ?></span></div>
+                <?php if ($globalProfileMismatch): ?>
+                    <div class="kpi" style="color:#fbbf24;">⚠ profile mismatch (champion=<?php echo htmlspecialchars($globalChampionPolicyProfile, ENT_QUOTES, 'UTF-8'); ?>, board=<?php echo htmlspecialchars((string) ($championBoard['policy_profile'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>)</div>
+                <?php endif; ?>
                 <?php $globalBreakdown = is_array($globalChampionDecision['score_breakdown'] ?? null) ? $globalChampionDecision['score_breakdown'] : []; ?>
                 <?php $globalNorm = is_array($globalBreakdown['normalized'] ?? null) ? $globalBreakdown['normalized'] : []; ?>
                 <div class="kpi">breakdown: loss=<?php echo htmlspecialchars((string) ($globalNorm['loss'] ?? ''), ENT_QUOTES, 'UTF-8'); ?> · time=<?php echo htmlspecialchars((string) ($globalNorm['time'] ?? ''), ENT_QUOTES, 'UTF-8'); ?> · stability=<?php echo htmlspecialchars((string) ($globalNorm['stability'] ?? ''), ENT_QUOTES, 'UTF-8'); ?> · quality=<?php echo htmlspecialchars((string) ($globalNorm['quality'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>

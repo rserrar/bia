@@ -463,6 +463,7 @@ class ModelTrainerEngine:
             "champion_active": True,
             "champion_scope": self.champion_scope,
             "champion_policy_version": str(self.selection_policy_config.get("policy_version", "selection_policy_v1")),
+            "champion_policy_profile": str(self.selection_policy_config.get("profile", "default")),
             "champion_score": best_score,
             "champion_selection_reason": str(best_decision.get("selection_reason", "")),
             "champion_score_breakdown": best_decision.get("score_breakdown", {}),
@@ -503,6 +504,7 @@ class ModelTrainerEngine:
                     "score": best_score,
                     "selection_reason": best_decision.get("selection_reason", ""),
                     "policy_version": self.selection_policy_config.get("policy_version", "selection_policy_v1"),
+                    "policy_profile": self.selection_policy_config.get("profile", "default"),
                 },
             )
         except Exception:
