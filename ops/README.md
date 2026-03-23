@@ -21,6 +21,7 @@ Document de desplegament real:
 - `scripts/run_llm_full_prompt_check.py`: valida prompt complet (mode sec o amb enviament LLM/API)
 - `scripts/run_generated_proposals_compile_check.py`: compila propostes d'un `run_id` i reporta errors de schema
 - `scripts/preview_selection_policy.py`: calcula ranking deterministic de models segons Selection Policy v1
+- `scripts/run_integration_matrix.py`: executa matriu d'integracio multi-run i genera report JSON+MD
 - `scripts/p0_health_check.py`: comprovació P0 (API reachable, cues pendents encallades, resum PASS/FAIL)
 - `scripts/run_trainer_supervisor.py`: manté `run_trainer.py` actiu amb auto-restart i health check cada 5 minuts
 - `scripts/run_e2e_final_smoke.py`: prova E2E final automàtica (trial LLM + trainer + validació trained/artifacts/metadata)
@@ -38,6 +39,14 @@ Variables utiles de selection/champion:
 - `V2_CHAMPION_SCOPE=run|global`
 - `V2_CHAMPION_MIN_SCORE=...` (override opcional)
 - `V2_CHAMPION_MARGIN_MIN=...` (override opcional)
+
+Variables utiles de integration matrix:
+
+- `V2_MATRIX_MODE=plan|run`
+- `V2_MATRIX_RUNS=5`
+- `V2_MATRIX_PROFILES=small_test,default`
+- `V2_MATRIX_GENERATIONS=1`
+- `V2_MATRIX_STALE_MINUTES=20`
 
 ## Flux curt recomanat (fase de proves)
 
