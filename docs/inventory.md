@@ -6,6 +6,10 @@ Aquesta carpeta `docs/` es el punt d'entrada unificat.
 
 - `docs/core.md`
 - `docs/runtime_flow.md`
+- `docs/architecture.md`
+- `docs/components.md`
+- `docs/roadmap.md`
+- `docs/structure.md`
 - `docs/server_api.md`
 - `docs/operations.md`
 - `docs/observability.md`
@@ -19,10 +23,13 @@ Aquesta carpeta `docs/` es el punt d'entrada unificat.
 Root:
 
 - `README.md`
-- `STRUCTURE.md`
-- `ARCHITECTURE.md`
-- `COMPONENTS.md`
-- `ROADMAP.md`
+
+Root legacy duplicated docs removed after migration:
+
+- `STRUCTURE.md` (migrat a `docs/structure.md`)
+- `ARCHITECTURE.md` (migrat a `docs/architecture.md`)
+- `COMPONENTS.md` (migrat a `docs/components.md`)
+- `ROADMAP.md` (migrat a `docs/roadmap.md`)
 
 Colab worker:
 

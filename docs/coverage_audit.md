@@ -1,95 +1,40 @@
 # Coverage Audit
 
-Objectiu: verificar que la documentacio centralitzada cobreix el coneixement dels fitxers originals abans de retirar docs antics.
+Objectiu: comprovar cobertura 1:1 entre docs originals i hub centralitzat abans/el mateix moment de retirar duplicats.
 
-## Resum
+## Resultat actual
 
-- Estat global: **cobertura funcional alta** per operacio P0.
-- Estat per retirada immediata: **no recomanat encara**.
-- Motiu: alguns fitxers antics son "living docs" (tracking i backlog) i no equival unificable 1:1.
+- Cobertura global del coneixement funcional: **alta**.
+- Duplicats retirats: **si** (docs root migrats al hub).
+- Tracking viu mantingut fora del hub: **si** (`ops/PLAN_TRACKER.md`, `ops/IMPLEMENTATION_TODO.md`).
 
-## Mapping originals -> docs hub
+## Mapping de migracio principal
 
-`README.md`
+`ARCHITECTURE.md` -> `docs/architecture.md`
 
-- Cobert a: `core.md`, `runtime_flow.md`, `operations.md`, `inventory.md`
-- Estat: gairebe complet.
+- Estat: cobert i consolidat.
 
-`ARCHITECTURE.md`
+`COMPONENTS.md` -> `docs/components.md`
 
-- Cobert a: `core.md`
-- Estat: parcial (arquitectura historicament mes extensa al fitxer original).
+- Estat: cobert i consolidat.
 
-`COMPONENTS.md`
+`ROADMAP.md` -> `docs/roadmap.md`
 
-- Cobert a: `core.md`, `server_api.md`, `operations.md`
-- Estat: parcial.
+- Estat: cobert i actualitzat a context real de proves curtes.
 
-`ROADMAP.md`
+`STRUCTURE.md` -> `docs/structure.md`
 
-- Cobert a: `decisions_and_outcomes.md` (des del que realment s'ha executat)
-- Estat: parcial (roadmap original segueix sent referencia de planificacio).
+- Estat: cobert i simplificat per operacio actual.
 
-`STRUCTURE.md`
+## Docs que continuen fora del hub (intencional)
 
-- Cobert a: `inventory.md`, `core.md`
-- Estat: parcial.
+- `ops/PLAN_TRACKER.md`: seguiment viu de fase/backlog.
+- `ops/IMPLEMENTATION_TODO.md`: backlog viu amb checkbox.
+- `ops/REAL_ENV_ROLLOUT.md`: context historic de desplegament.
+- `ops/REPO_SETUP.md`: guia practica de repo.
 
-`colab-worker/README.md`
+## Pending for full single-folder policy
 
-- Cobert a: `runtime_flow.md`, `operations.md`, `errors.md`
-- Estat: gairebe complet.
+Per tenir absolutament tota la documentacio sota `docs/`, caldria migrar tambe els fitxers de tracking viu d'`ops/` i deixar alias curts.
 
-`colab-worker/COLAB_NOTEBOOK_PLAN.md`
-
-- Cobert a: `runtime_flow.md`
-- Estat: parcial (les cel.les detallades encara viuen al document original).
-
-`server-api/README.md`
-
-- Cobert a: `server_api.md`, `operations.md`
-- Estat: gairebe complet.
-
-`ops/README.md`
-
-- Cobert a: `operations.md`, `observability.md`
-- Estat: complet per P0.
-
-`ops/PLAN_TRACKER.md`
-
-- Cobert a: no es replica intencionalment.
-- Estat: mantenir com a document viu de seguiment.
-
-`ops/IMPLEMENTATION_TODO.md`
-
-- Cobert a: no es replica intencionalment.
-- Estat: mantenir com a backlog viu.
-
-`ops/REAL_ENV_ROLLOUT.md`
-
-- Cobert a: `runtime_flow.md`, `decisions_and_outcomes.md`
-- Estat: parcial.
-
-`ops/REPO_SETUP.md`
-
-- Cobert a: `operations.md` (part operativa)
-- Estat: parcial.
-
-`local-frontend/README.md`, `shared/README.md`, `tests/README.md`
-
-- Cobert a: `inventory.md`
-- Estat: minim, recomanat mantenir originals per ara.
-
-## Gaps detectats (a completar abans d'eliminar originals)
-
-1. Crear fitxa especifica de frontend local i contractes de polling.
-2. Crear fitxa especifica de `shared/` i contractes de clients/utils.
-3. Consolidar roadmap historic + estat actual en un sol document de estrategia.
-
-## Criteri de retirada de docs antics
-
-Eliminar docs antics nomes quan:
-
-- cada original tingui cobertura equivalent explicitada al hub,
-- no perdi detall executable,
-- i els fitxers de tracking viu (`PLAN_TRACKER`, `IMPLEMENTATION_TODO`) tinguin substitut clar.
+Avui no s'ha fet per evitar trencar el flux operatiu durant proves.

@@ -21,6 +21,10 @@ L'objectiu practic actual es executar cicles curts, repetibles i auditables on e
 
 - `core.md`: visio global i mapa de navegacio.
 - `runtime_flow.md`: flux curt executable de proves.
+- `architecture.md`: visio tecnica i contractes que no han de regressar.
+- `components.md`: responsabilitats i limits de cada component.
+- `roadmap.md`: estat de fases i outcomes esperats.
+- `structure.md`: estructura actual i politica documental.
 - `server_api.md`: contractes i comportament real d'endpoints.
 - `operations.md`: arrencada, parada i scripts operatius.
 - `observability.md`: visibilitat runtime i interpretacio rapida.
@@ -34,6 +38,22 @@ L'objectiu practic actual es executar cicles curts, repetibles i auditables on e
 Per executar en fase de proves (5-10 minuts):
 
 <runtime_flow>
+
+Per arquitectura i contractes essencials:
+
+<architecture>
+
+Per mapa de components i responsabilitats:
+
+<components>
+
+Per estat de fases i orientacio propera:
+
+<roadmap>
+
+Per estructura i politica de documentacio:
+
+<structure>
 
 Per entendre el contracte real de l'API i metadades de proposals:
 
