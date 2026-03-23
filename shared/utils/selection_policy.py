@@ -22,7 +22,7 @@ def _to_float(value: Any) -> float | None:
 
 def default_policy_config() -> dict[str, Any]:
     return {
-        "policy_version": "selection_policy_v1",
+        "policy_version": "selection_policy_v1_1",
         "profile": "default",
         "weights": {
             "loss": 0.55,
@@ -181,7 +181,7 @@ def evaluate_reference_candidate(proposal: dict[str, Any], config: dict[str, Any
         selection_reason = "eligible_pretrained_candidate"
 
     return {
-        "policy_version": str(policy.get("policy_version", "selection_policy_v1")),
+        "policy_version": str(policy.get("policy_version", "selection_policy_v1_1")),
         "proposal_id": proposal_id,
         "source_run_id": source_run_id,
         "status": status,

@@ -197,7 +197,7 @@ function policyConfigForProfile(string $profile): array
 {
     $selected = strtolower(trim($profile));
     $base = [
-        'policy_version' => 'selection_policy_v1',
+        'policy_version' => 'selection_policy_v1_1',
         'profile' => 'default',
         'weights' => [
             'loss' => 0.55,
@@ -455,7 +455,7 @@ function buildChampionBoard(array $proposals, array $runs, array $policy): array
 
     return [
         'latest_run_id' => $latestRunId,
-        'policy_version' => (string) ($policy['policy_version'] ?? 'selection_policy_v1'),
+        'policy_version' => (string) ($policy['policy_version'] ?? 'selection_policy_v1_1'),
         'policy_profile' => (string) ($policy['profile'] ?? 'default'),
         'champion_global' => $globalChampion,
         'champion_run' => $runChampion,
@@ -517,7 +517,7 @@ try {
     }
     $runs = $service->listRuns(100);
     $proposals = $service->listModelProposals(100);
-    $recentEvents = $service->listEvents(50);
+    $recentEvents = $service->listEvents(15);
     $recentMetrics = $service->listMetrics(50);
     $selectionPolicyProfile = envValue('V2_SELECTION_POLICY_PROFILE', 'default');
     $selectionPolicy = policyConfigForProfile($selectionPolicyProfile);
