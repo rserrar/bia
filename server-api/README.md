@@ -65,8 +65,14 @@ Contracte de propostes LLM:
 - `GET /model-proposals/{proposal_id}`
 - `POST /model-proposals/{proposal_id}/status`
 - `POST /model-proposals/{proposal_id}/enqueue-phase0`
+- `POST /model-proposals/lock-for-training`
 - `POST /maintenance/process-model-proposals-phase0`
 - `GET /runs/{run_id}/events?limit=200`
+
+Nota de persistència de metadades:
+
+- `POST /model-proposals/{proposal_id}/status` admet `metadata_updates` i els fusiona a `llm_metadata`.
+- Això permet guardar `training_kpis`, `trained_model_uri` i altres camps operatius després de l'entrenament.
 
 L'endpoint de manteniment de phase0 processa propostes `queued_phase0` i les marca automàticament com `validated_phase0` o `rejected`.
 

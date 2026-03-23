@@ -30,3 +30,26 @@ Variables útils del supervisor:
 - `V2_SUPERVISOR_AUTO_FEED=true|false`: si no hi ha feina pendent, genera feina automàticament
 - `V2_SUPERVISOR_AUTO_FEED_MIN_INTERVAL_SECONDS=180`: interval mínim entre auto-feeds
 - `V2_SUPERVISOR_FEED_GENERATIONS=1`: generacions per trial quan auto-feed usa LLM
+
+## Flux curt recomanat (fase de proves)
+
+1. Prova E2E automàtica (1 generació + entrenament + validació final):
+
+```bash
+cd V2
+python ops/scripts/run_e2e_final_smoke.py
+```
+
+2. Operació contínua (trainer persistent + auto-feed):
+
+```bash
+cd V2
+python ops/scripts/run_trainer_supervisor.py
+```
+
+3. Observabilitat en temps real per CLI:
+
+```bash
+cd V2
+python ops/scripts/watch_runtime_status.py
+```

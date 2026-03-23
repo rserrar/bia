@@ -5,7 +5,7 @@ Conté el codi d'execució automàtica del pipeline d'evolució de models.
 Guia de notebook per prova real:
 
 - `COLAB_NOTEBOOK_PLAN.md`
-- `V2_real_run_notebook.ipynb`
+- `V2_runtime_ready_colab.ipynb`
 - Config de validació Fase 0: `../ops/configs/phase0_model_validation.json`
 
 ## Layout de dades per al worker
@@ -15,7 +15,7 @@ El pipeline de training/validació fa servir la configuració d'experiment a `co
 - Camp clau:
 
 ```json
-  "data_dir": "V2/data"
+  "data_dir": "data/min"
 ```
 
 - CSV esperats (relatius a `data_dir`):
@@ -23,22 +23,22 @@ El pipeline de training/validació fa servir la configuració d'experiment a `co
   - `entrada_extra.csv`
   - `min.csv`
   - `max.csv`
-  - `sortida_min_7d.csv`
-  - `sortida_max_7d.csv`
+  - `sortida_min.csv`
+  - `sortida_max.csv`
   - `sortida_tb.csv`
   - `sortida_sl.csv`
   - `sortida_sn.csv`
-  - `sortida_valors_7d.csv`
+  - `sortida_valors.csv`
 
 ### Mode de prova amb dataset mínim
 
-Per a un test ràpid pots treballar amb un subconjunt de dades dins `V2/data/min`:
+Per a un test ràpid pots treballar amb un subconjunt de dades dins `data/min`:
 
-1. Crea el directori `V2/data/min` i col·loca-hi els CSV mínims necessaris amb els noms anteriors.
+1. Crea el directori `data/min` i col·loca-hi els CSV mínims necessaris amb els noms anteriors.
 2. Edita `configs/experiment_config.json` i posa:
 
 ```json
-  "data_dir": "V2/data/min"
+  "data_dir": "data/min"
 ```
 
 Després d'això, el worker (`colab-worker/src/run_worker.py`) i els scripts d'`ops` que usen l'experiment podran llegir directament el dataset des d'aquest directori.
@@ -67,6 +67,7 @@ Variables:
 - `V2_API_BASE_URL`
 - `V2_API_PATH_PREFIX`
 - `V2_API_TOKEN`
+- `V2_API_TIMEOUT_SECONDS`
 - `V2_VERIFY_LEGACY_MODEL_BUILD`
 - `V2_LEGACY_BUILD_CHECK_STRICT`
 - `V2_LEGACY_MODEL_JSON_PATH`
@@ -93,12 +94,14 @@ Variables:
 - `V2_LLM_NUM_REFERENCE_MODELS`
 - `V2_LLM_MIN_INTERVAL_SECONDS`
 - `V2_LLM_REPAIR_ON_VALIDATION_ERROR`
+- `V2_BOOTSTRAP_SEED_MODEL_IF_EMPTY`
 - `V2_TRIAL_MAX_GENERATIONS`
 - `V2_TRIAL_HEARTBEAT_SECONDS`
 - `V2_TRIAL_CODE_VERSION`
 - `V2_TRIAL_VERIFY_LEGACY`
 
 Quan `V2_AUTO_PROCESS_PROPOSALS_PHASE0=true`, el worker processa automàticament propostes en estat `queued_phase0`.
+Quan `V2_BOOTSTRAP_SEED_MODEL_IF_EMPTY=true`, si no hi ha cap proposta al servidor es crea un model seed automàtic des de `V2_PROMPT_REFERENCE_MODEL_PATH`.
 El client API prova automàticament els prefixes ``, `/public/index.php` i `/public` quan rep 404.
 Quan `V2_LLM_ENABLED=true`, el worker genera propostes de model per generació i les envia a `/model-proposals`.
 Amb `V2_LLM_USE_LEGACY_INTERFACE=true` reaprofita `utils/llm_interface.py` existent; si no, usa client OpenAI-compatible intern.
@@ -128,3 +131,4 @@ Notes operatives:
 
 - Si el trial mostra endpoint amb backticks o espais, fes `git pull` a `/content/b-ia` i torna a executar.
 - Missatges CUDA/cuDNN a Colab CPU són informatius; no impliquen error funcional del worker.
+- El trainer actualitza events per època (`model_training_epoch_start/end`) i registra artifact `trained_model` quan finalitza.

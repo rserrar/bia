@@ -12,7 +12,7 @@ V2/
     src/
     configs/
     checkpoints/
-    V2_real_run_notebook.ipynb
+    V2_runtime_ready_colab.ipynb
     COLAB_NOTEBOOK_PLAN.md
 
   server-api/
@@ -36,6 +36,13 @@ V2/
     scripts/
     healthchecks/
 
+Scripts operatius clau actuals:
+
+- `ops/scripts/run_e2e_final_smoke.py`
+- `ops/scripts/run_trainer_supervisor.py`
+- `ops/scripts/watch_runtime_status.py`
+- `ops/scripts/p0_health_check.py`
+
   tests/
     integration/
     contract/
@@ -47,4 +54,3 @@ V2/
 - Codi compartit només a `shared/`
 - Configuracions diferenciades per component
 - Tests de contracte per evitar trencaments entre components
-
