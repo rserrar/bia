@@ -23,6 +23,7 @@ Document de desplegament real:
 - `scripts/p0_health_check.py`: comprovació P0 (API reachable, cues pendents encallades, resum PASS/FAIL)
 - `scripts/run_trainer_supervisor.py`: manté `run_trainer.py` actiu amb auto-restart i health check cada 5 minuts
 - `scripts/run_e2e_final_smoke.py`: prova E2E final automàtica (trial LLM + trainer + validació trained/artifacts/metadata)
+- `scripts/watch_runtime_status.py`: visor de runtime en temps real per Colab (run/proposals/events/artifacts)
 
 Variables útils del supervisor:
 
