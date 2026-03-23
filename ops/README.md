@@ -23,3 +23,9 @@ Document de desplegament real:
 - `scripts/p0_health_check.py`: comprovació P0 (API reachable, cues pendents encallades, resum PASS/FAIL)
 - `scripts/run_trainer_supervisor.py`: manté `run_trainer.py` actiu amb auto-restart i health check cada 5 minuts
 - `scripts/run_e2e_final_smoke.py`: prova E2E final automàtica (trial LLM + trainer + validació trained/artifacts/metadata)
+
+Variables útils del supervisor:
+
+- `V2_SUPERVISOR_AUTO_FEED=true|false`: si no hi ha feina pendent, genera feina automàticament
+- `V2_SUPERVISOR_AUTO_FEED_MIN_INTERVAL_SECONDS=180`: interval mínim entre auto-feeds
+- `V2_SUPERVISOR_FEED_GENERATIONS=1`: generacions per trial quan auto-feed usa LLM

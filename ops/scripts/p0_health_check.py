@@ -90,6 +90,8 @@ def run_check() -> dict:
     checks.append({"name": "model_proposals_reachable", "ok": True, "resolved_model_proposals_url": resolved_proposals_url})
 
     pending = [p for p in proposals if str(p.get("status", "")).strip() in {"accepted", "validated_phase0"}]
+    training = [p for p in proposals if str(p.get("status", "")).strip() == "training"]
+    queued_phase0 = [p for p in proposals if str(p.get("status", "")).strip() == "queued_phase0"]
     stale_pending = []
     for item in pending:
         updated_at = str(item.get("updated_at", ""))
@@ -121,6 +123,10 @@ def run_check() -> dict:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "runs_count": len(runs),
         "proposals_count": len(proposals),
+        "pending_proposals_count": len(pending),
+        "training_proposals_count": len(training),
+        "queued_phase0_count": len(queued_phase0),
+        "trained_proposals_count": trained_count,
         "checks": checks,
     }
 
