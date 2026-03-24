@@ -160,3 +160,18 @@ Per a un tecnic nou al sistema, el cami recomanat es:
 7. `cleanup_inconsistent_state.py`
 
 Aquest es el happy path operatiu actual de V2.
+
+## 10. API-first UI note
+
+El monitor web actual ha de consumir dades de la read API en comptes de calcular ranking/summaries localment.
+
+Endpoints UI canònics:
+
+- `GET /runs`
+- `GET /runs/{id}`
+- `GET /runs/{id}/summary`
+- `GET /runs/{id}/references`
+- `GET /proposals`
+- `GET /champion/run/{id}`
+- `GET /champion/global`
+- `GET /models/shortlist`

@@ -21,8 +21,13 @@ Els clients del repo ja fan autodeteccio de prefix quan reben `404`.
 - `POST /runs/{run_id}/artifacts`
 - `GET /runs/{run_id}`
 - `GET /runs/{run_id}/summary`
+- `GET /runs/{run_id}/references`
 - `GET /model-proposals?limit=...`
+- `GET /proposals?limit=...`
 - `GET /model-proposals/{proposal_id}`
+- `GET /champion/run/{run_id}`
+- `GET /champion/global`
+- `GET /models/shortlist`
 - `POST /model-proposals/{proposal_id}/status`
 - `POST /model-proposals/{proposal_id}/enqueue-phase0`
 - `POST /model-proposals/lock-for-training`
@@ -51,3 +56,18 @@ Si aquests camps no es guarden, revisar desplegament real de:
 - token compatible (query/header)
 
 En entorn real, recomanat passar credencials a `.env` i evitar hardcode.
+
+## UI-first read contracts
+
+Els endpoints nous de lectura estan pensats per monitor i futur frontend extern.
+
+- `GET /proposals`
+  - proposals enriquides per UI (`training_kpis`, `trained_model_uri`, `prompt_audit`, info champion)
+- `GET /champion/run/{id}`
+  - champion de run + top candidates + policy metadata
+- `GET /champion/global`
+  - champion global + ranking global
+- `GET /runs/{id}/references`
+  - transparència de prompt: quins models s'han passat al LLM
+- `GET /models/shortlist`
+  - shortlist consumible directament per UI (score, rationale, artifact)

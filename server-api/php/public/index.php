@@ -254,6 +254,15 @@ try {
         respond(200, ['model_proposals' => $service->listModelProposals($limit)]);
     }
 
+    if ($method === 'GET' && $parts === ['proposals']) {
+        $limitParam = $_GET['limit'] ?? '100';
+        $limit = is_numeric($limitParam) ? (int) $limitParam : 100;
+        if ($limit <= 0) {
+            $limit = 100;
+        }
+        respond(200, ['proposals' => $service->listUiProposals($limit)]);
+    }
+
     if ($method === 'GET' && count($parts) === 2 && $parts[0] === 'model-proposals') {
         respond(200, $service->getModelProposal($parts[1]));
     }
@@ -287,12 +296,66 @@ try {
         respond(200, ['runs' => $service->listRuns($limit)]);
     }
 
+    if ($method === 'GET' && $parts === ['events']) {
+        $limitParam = $_GET['limit'] ?? '50';
+        $limit = is_numeric($limitParam) ? (int) $limitParam : 50;
+        if ($limit <= 0) {
+            $limit = 50;
+        }
+        respond(200, ['events' => $service->listEvents($limit)]);
+    }
+
+    if ($method === 'GET' && $parts === ['metrics']) {
+        $limitParam = $_GET['limit'] ?? '50';
+        $limit = is_numeric($limitParam) ? (int) $limitParam : 50;
+        if ($limit <= 0) {
+            $limit = 50;
+        }
+        respond(200, ['metrics' => $service->listMetrics($limit)]);
+    }
+
     if ($method === 'GET' && count($parts) === 2 && $parts[0] === 'runs') {
         respond(200, $service->getRun($parts[1]));
     }
 
     if ($method === 'GET' && count($parts) === 3 && $parts[0] === 'runs' && $parts[2] === 'summary') {
         respond(200, $service->getSummary($parts[1]));
+    }
+
+    if ($method === 'GET' && count($parts) === 3 && $parts[0] === 'runs' && $parts[2] === 'references') {
+        $limitParam = $_GET['limit'] ?? '10';
+        $limit = is_numeric($limitParam) ? (int) $limitParam : 10;
+        if ($limit <= 0) {
+            $limit = 10;
+        }
+        respond(200, $service->getRunReferences($parts[1], $limit));
+    }
+
+    if ($method === 'GET' && count($parts) === 3 && $parts[0] === 'champion' && $parts[1] === 'run') {
+        $topNParam = $_GET['top_n'] ?? '5';
+        $topN = is_numeric($topNParam) ? (int) $topNParam : 5;
+        if ($topN <= 0) {
+            $topN = 5;
+        }
+        respond(200, $service->getChampionRun($parts[2], $topN));
+    }
+
+    if ($method === 'GET' && $parts === ['champion', 'global']) {
+        $topNParam = $_GET['top_n'] ?? '5';
+        $topN = is_numeric($topNParam) ? (int) $topNParam : 5;
+        if ($topN <= 0) {
+            $topN = 5;
+        }
+        respond(200, $service->getChampionGlobal($topN));
+    }
+
+    if ($method === 'GET' && $parts === ['models', 'shortlist']) {
+        $limitParam = $_GET['limit'] ?? '10';
+        $limit = is_numeric($limitParam) ? (int) $limitParam : 10;
+        if ($limit <= 0) {
+            $limit = 10;
+        }
+        respond(200, $service->getModelsShortlist($limit));
     }
 
     if ($method === 'GET' && count($parts) === 3 && $parts[0] === 'runs' && $parts[2] === 'events') {

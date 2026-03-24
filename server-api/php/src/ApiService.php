@@ -184,6 +184,16 @@ final class ApiService
         $events = array_values(array_filter($state['events'], static fn(array $event): bool => $event['run_id'] === $runId));
         $metrics = array_values(array_filter($state['metrics'], static fn(array $metric): bool => $metric['run_id'] === $runId));
         $artifacts = array_values(array_filter($state['artifacts'], static fn(array $artifact): bool => $artifact['run_id'] === $runId));
+        $proposals = array_values(array_filter(
+            is_array($state['model_proposals'] ?? null) ? $state['model_proposals'] : [],
+            static fn(array $proposal): bool => (string) ($proposal['source_run_id'] ?? '') === $runId
+        ));
+        $proposalsByStatus = [];
+        foreach ($proposals as $proposal) {
+            $status = (string) ($proposal['status'] ?? 'unknown');
+            $proposalsByStatus[$status] = (int) ($proposalsByStatus[$status] ?? 0) + 1;
+        }
+        $champion = $this->getChampionRun($runId, 5);
 
         return [
             'run' => $state['runs'][$runId],
@@ -191,10 +201,126 @@ final class ApiService
                 'events' => count($events),
                 'metrics' => count($metrics),
                 'artifacts' => count($artifacts),
+                'proposals' => count($proposals),
             ],
+            'proposals_by_status' => $proposalsByStatus,
+            'champion' => $champion['champion'] ?? null,
             'latest_event' => count($events) > 0 ? $events[count($events) - 1] : null,
             'latest_metric' => count($metrics) > 0 ? $metrics[count($metrics) - 1] : null,
             'latest_artifact' => count($artifacts) > 0 ? $artifacts[count($artifacts) - 1] : null,
+        ];
+    }
+
+    public function listUiProposals(int $limit = 100): array
+    {
+        $proposals = $this->listModelProposals($limit);
+        $enriched = [];
+        foreach ($proposals as $proposal) {
+            $llmMetadata = is_array($proposal['llm_metadata'] ?? null) ? $proposal['llm_metadata'] : [];
+            $enriched[] = [
+                'proposal_id' => (string) ($proposal['proposal_id'] ?? ''),
+                'status' => (string) ($proposal['status'] ?? ''),
+                'source_run_id' => (string) ($proposal['source_run_id'] ?? ''),
+                'base_model_id' => (string) ($proposal['base_model_id'] ?? ''),
+                'updated_at' => (string) ($proposal['updated_at'] ?? ''),
+                'trained_model_uri' => $llmMetadata['trained_model_uri'] ?? null,
+                'training_kpis' => is_array($llmMetadata['training_kpis'] ?? null) ? $llmMetadata['training_kpis'] : [],
+                'prompt_audit' => is_array($llmMetadata['prompt_audit'] ?? null) ? $llmMetadata['prompt_audit'] : [],
+                'champion' => [
+                    'active' => (bool) ($llmMetadata['champion_active'] ?? false),
+                    'scope' => (string) ($llmMetadata['champion_scope'] ?? ''),
+                    'score' => $llmMetadata['champion_score'] ?? null,
+                    'policy_version' => (string) ($llmMetadata['champion_policy_version'] ?? ''),
+                    'policy_profile' => (string) ($llmMetadata['champion_policy_profile'] ?? ''),
+                ],
+            ];
+        }
+        return $enriched;
+    }
+
+    public function getChampionRun(string $runId, int $topN = 5): array
+    {
+        $state = $this->store->readAll();
+        if (!isset($state['runs'][$runId])) {
+            throw new RuntimeException('run not found');
+        }
+        $policy = $this->policyConfigForProfile(getenv('V2_SELECTION_POLICY_PROFILE') ?: 'default');
+        $proposals = $this->listModelProposals(1000);
+        $filtered = array_values(array_filter(
+            $proposals,
+            static fn(array $proposal): bool => (string) ($proposal['source_run_id'] ?? '') === $runId
+        ));
+        return $this->buildChampionPayload($filtered, 'run', $runId, $policy, $topN);
+    }
+
+    public function getChampionGlobal(int $topN = 5): array
+    {
+        $policy = $this->policyConfigForProfile(getenv('V2_SELECTION_POLICY_PROFILE') ?: 'default');
+        $proposals = $this->listModelProposals(1000);
+        return $this->buildChampionPayload($proposals, 'global', null, $policy, $topN);
+    }
+
+    public function getRunReferences(string $runId, int $limit = 10): array
+    {
+        $proposal = null;
+        foreach ($this->listModelProposals(1000) as $candidate) {
+            if ((string) ($candidate['source_run_id'] ?? '') !== $runId) {
+                continue;
+            }
+            $llmMetadata = is_array($candidate['llm_metadata'] ?? null) ? $candidate['llm_metadata'] : [];
+            $promptAudit = is_array($llmMetadata['prompt_audit'] ?? null) ? $llmMetadata['prompt_audit'] : [];
+            if (!empty($promptAudit)) {
+                $proposal = $candidate;
+                break;
+            }
+        }
+        if ($proposal === null) {
+            return ['run_id' => $runId, 'references' => [], 'fallback_used' => false];
+        }
+        $llmMetadata = is_array($proposal['llm_metadata'] ?? null) ? $proposal['llm_metadata'] : [];
+        $promptAudit = is_array($llmMetadata['prompt_audit'] ?? null) ? $llmMetadata['prompt_audit'] : [];
+        $selected = array_values(array_slice(
+            is_array($promptAudit['reference_models_selected'] ?? null) ? $promptAudit['reference_models_selected'] : [],
+            0,
+            max(1, $limit)
+        ));
+        return [
+            'run_id' => $runId,
+            'reference_policy_version' => (string) ($promptAudit['reference_policy_version'] ?? ''),
+            'reference_models_count' => (int) ($promptAudit['reference_models_count'] ?? count($selected)),
+            'references' => $selected,
+            'fallback_used' => count($selected) > 0 && (string) (($selected[0]['selection_reason'] ?? '')) === 'local_fallback',
+        ];
+    }
+
+    public function getModelsShortlist(int $limit = 10): array
+    {
+        $payload = $this->getChampionGlobal(max(1, $limit));
+        $shortlist = [];
+        foreach (array_slice($payload['top_candidates'] ?? [], 0, max(1, $limit)) as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $proposal = is_array($entry['proposal'] ?? null) ? $entry['proposal'] : [];
+            $decision = is_array($entry['decision'] ?? null) ? $entry['decision'] : [];
+            $llmMetadata = is_array($proposal['llm_metadata'] ?? null) ? $proposal['llm_metadata'] : [];
+            $trainingKpis = is_array($llmMetadata['training_kpis'] ?? null) ? $llmMetadata['training_kpis'] : [];
+            $shortlist[] = [
+                'proposal_id' => (string) ($proposal['proposal_id'] ?? ''),
+                'source_run_id' => (string) ($proposal['source_run_id'] ?? ''),
+                'status' => (string) ($proposal['status'] ?? ''),
+                'score' => $decision['score'] ?? null,
+                'selection_reason' => (string) ($decision['selection_reason'] ?? ''),
+                'score_breakdown' => $decision['score_breakdown'] ?? [],
+                'trained_model_uri' => $llmMetadata['trained_model_uri'] ?? null,
+                'training_kpis' => $trainingKpis,
+                'rationale' => $this->buildShortRationale($decision, $trainingKpis),
+            ];
+        }
+        return [
+            'policy_version' => $payload['policy_version'] ?? 'selection_policy_v1_1',
+            'policy_profile' => $payload['policy_profile'] ?? 'default',
+            'shortlist' => $shortlist,
         ];
     }
 
@@ -561,5 +687,156 @@ final class ApiService
     private function nowIso(): string
     {
         return gmdate('c');
+    }
+
+    private function policyConfigForProfile(string $profile): array
+    {
+        $selected = strtolower(trim($profile));
+        $base = [
+            'policy_version' => 'selection_policy_v1_1',
+            'profile' => 'default',
+            'weights' => [
+                'loss' => 0.55,
+                'time' => 0.15,
+                'stability' => 0.20,
+                'quality' => 0.10,
+            ],
+            'loss_cap' => 200000.0,
+            'time_cap_seconds' => 1800.0,
+            'hard_time_limit_seconds' => 3600.0,
+            'champion_min_score' => 45.0,
+            'champion_margin_min' => 2.0,
+        ];
+        if (in_array($selected, ['small', 'small_test', 'test'], true)) {
+            $base['profile'] = 'small_test';
+            $base['weights'] = ['loss' => 0.50, 'time' => 0.20, 'stability' => 0.20, 'quality' => 0.10];
+            $base['loss_cap'] = 300000.0;
+            $base['time_cap_seconds'] = 900.0;
+            $base['hard_time_limit_seconds'] = 1800.0;
+            $base['champion_min_score'] = 35.0;
+            $base['champion_margin_min'] = 1.0;
+        } elseif (in_array($selected, ['real', 'large', 'real_large', 'prod'], true)) {
+            $base['profile'] = 'real_large';
+            $base['weights'] = ['loss' => 0.65, 'time' => 0.05, 'stability' => 0.20, 'quality' => 0.10];
+            $base['time_cap_seconds'] = 7200.0;
+            $base['hard_time_limit_seconds'] = 14400.0;
+            $base['champion_min_score'] = 50.0;
+            $base['champion_margin_min'] = 3.0;
+        }
+        return $base;
+    }
+
+    private function evaluateProposalSelection(array $proposal, array $policy): array
+    {
+        $status = (string) ($proposal['status'] ?? '');
+        $llmMetadata = is_array($proposal['llm_metadata'] ?? null) ? $proposal['llm_metadata'] : [];
+        $trainingKpis = is_array($llmMetadata['training_kpis'] ?? null) ? $llmMetadata['training_kpis'] : [];
+        $kpiEval = is_array($llmMetadata['kpi_evaluation'] ?? null) ? $llmMetadata['kpi_evaluation'] : [];
+        $kpiResult = (string) ($llmMetadata['kpi_result'] ?? '');
+        $valLoss = isset($trainingKpis['val_loss_total']) ? (float) $trainingKpis['val_loss_total'] : (isset($kpiEval['val_loss_total']) ? (float) $kpiEval['val_loss_total'] : null);
+        $trainingTime = isset($trainingKpis['training_time_seconds']) ? (float) $trainingKpis['training_time_seconds'] : (isset($llmMetadata['training_time']) ? (float) $llmMetadata['training_time'] : null);
+        $constraintsFailed = [];
+        if (!in_array($status, ['trained', 'accepted', 'validated_phase0'], true)) {
+            $constraintsFailed[] = 'status_not_allowed';
+        }
+        if ($valLoss === null) {
+            $constraintsFailed[] = 'missing_val_loss_total';
+        }
+        if ($kpiResult === 'rejected_by_loss') {
+            $constraintsFailed[] = 'kpi_rejected';
+        }
+        $weights = is_array($policy['weights'] ?? null) ? $policy['weights'] : [];
+        $normalizedLoss = ($valLoss !== null && (float) $policy['loss_cap'] > 0) ? max(0.0, 1.0 - min($valLoss, (float) $policy['loss_cap']) / (float) $policy['loss_cap']) : 0.0;
+        $normalizedTime = ($trainingTime !== null && (float) $policy['time_cap_seconds'] > 0) ? max(0.0, 1.0 - min($trainingTime, (float) $policy['time_cap_seconds']) / (float) $policy['time_cap_seconds']) : 0.5;
+        $normalizedStability = $status === 'trained' ? 1.0 : ($status === 'accepted' ? 0.75 : 0.55);
+        $normalizedQuality = $kpiResult === 'promoted' ? 1.0 : ($kpiResult === '' ? 0.7 : 0.5);
+        $rawScore = 100.0 * (
+            ((float) ($weights['loss'] ?? 0.55)) * $normalizedLoss +
+            ((float) ($weights['time'] ?? 0.15)) * $normalizedTime +
+            ((float) ($weights['stability'] ?? 0.20)) * $normalizedStability +
+            ((float) ($weights['quality'] ?? 0.10)) * $normalizedQuality
+        );
+        $penalties = [];
+        if ($trainingTime !== null && $trainingTime > (float) ($policy['hard_time_limit_seconds'] ?? 3600.0)) {
+            $penalties[] = ['name' => 'hard_time_limit', 'points' => 15.0];
+            $rawScore -= 15.0;
+        }
+        $eligible = count($constraintsFailed) === 0;
+        $selectionReason = !$eligible ? 'ineligible_due_to_constraints' : ($status === 'trained' ? 'eligible_trained_candidate' : 'eligible_pretrained_candidate');
+        return [
+            'proposal_id' => (string) ($proposal['proposal_id'] ?? ''),
+            'source_run_id' => (string) ($proposal['source_run_id'] ?? ''),
+            'status' => $status,
+            'eligible' => $eligible,
+            'score' => max(0.0, round($rawScore, 4)),
+            'selection_reason' => $selectionReason,
+            'constraints_failed' => $constraintsFailed,
+            'score_breakdown' => [
+                'normalized' => ['loss' => round($normalizedLoss, 6), 'time' => round($normalizedTime, 6), 'stability' => round($normalizedStability, 6), 'quality' => round($normalizedQuality, 6)],
+                'penalties' => $penalties,
+                'metrics_used' => ['val_loss_total' => $valLoss, 'training_time_seconds' => $trainingTime, 'kpi_result' => $kpiResult],
+            ],
+        ];
+    }
+
+    private function buildChampionPayload(array $proposals, string $scope, ?string $runId, array $policy, int $topN): array
+    {
+        $evaluated = [];
+        foreach ($proposals as $proposal) {
+            $decision = $this->evaluateProposalSelection($proposal, $policy);
+            if ((bool) ($decision['eligible'] ?? false)) {
+                $evaluated[] = ['proposal' => $proposal, 'decision' => $decision];
+            }
+        }
+        usort($evaluated, static function (array $a, array $b): int {
+            return ((float) ($b['decision']['score'] ?? 0.0)) <=> ((float) ($a['decision']['score'] ?? 0.0));
+        });
+        $active = null;
+        foreach ($proposals as $proposal) {
+            $metadata = is_array($proposal['llm_metadata'] ?? null) ? $proposal['llm_metadata'] : [];
+            if (($metadata['champion_active'] ?? false) !== true) {
+                continue;
+            }
+            if ((string) ($metadata['champion_scope'] ?? '') !== $scope) {
+                continue;
+            }
+            $active = $proposal;
+            break;
+        }
+        $champion = null;
+        if ($active !== null) {
+            foreach ($evaluated as $entry) {
+                if ((string) ($entry['proposal']['proposal_id'] ?? '') === (string) ($active['proposal_id'] ?? '')) {
+                    $champion = $entry;
+                    break;
+                }
+            }
+        }
+        if ($champion === null && count($evaluated) > 0) {
+            $champion = $evaluated[0];
+        }
+        return [
+            'scope' => $scope,
+            'run_id' => $runId,
+            'policy_version' => (string) ($policy['policy_version'] ?? 'selection_policy_v1_1'),
+            'policy_profile' => (string) ($policy['profile'] ?? 'default'),
+            'champion' => $champion,
+            'top_candidates' => array_slice($evaluated, 0, max(1, $topN)),
+        ];
+    }
+
+    private function buildShortRationale(array $decision, array $trainingKpis): string
+    {
+        $score = isset($decision['score']) ? (float) $decision['score'] : 0.0;
+        $valLoss = isset($trainingKpis['val_loss_total']) ? (float) $trainingKpis['val_loss_total'] : null;
+        $time = isset($trainingKpis['training_time_seconds']) ? (float) $trainingKpis['training_time_seconds'] : null;
+        $parts = [sprintf('score %.2f', $score)];
+        if ($valLoss !== null) {
+            $parts[] = 'val_loss ' . number_format($valLoss, 2, '.', '');
+        }
+        if ($time !== null) {
+            $parts[] = 'time ' . number_format($time, 2, '.', '') . 's';
+        }
+        return implode(' · ', $parts);
     }
 }

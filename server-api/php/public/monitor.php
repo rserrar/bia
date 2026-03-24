@@ -172,6 +172,42 @@ function buildStore()
     return new StateStore($stateFile);
 }
 
+function monitorApiBaseUrl(): string
+{
+    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    $host = (string) ($_SERVER['HTTP_HOST'] ?? 'localhost');
+    $scriptDir = rtrim(str_replace('\\', '/', dirname((string) ($_SERVER['SCRIPT_NAME'] ?? '/monitor.php'))), '/');
+    return $scheme . '://' . $host . ($scriptDir === '' ? '' : $scriptDir) . '/index.php';
+}
+
+function monitorApiRequest(string $path): array
+{
+    $baseUrl = monitorApiBaseUrl();
+    $url = $baseUrl . $path;
+    $headers = ["Accept: application/json"];
+    $expectedToken = envValue('V2_API_TOKEN', '');
+    if ($expectedToken !== '') {
+        $headers[] = 'Authorization: Bearer ' . $expectedToken;
+    }
+    $context = stream_context_create([
+        'http' => [
+            'method' => 'GET',
+            'header' => implode("\r\n", $headers),
+            'ignore_errors' => true,
+            'timeout' => 20,
+        ],
+    ]);
+    $raw = @file_get_contents($url, false, $context);
+    if ($raw === false) {
+        throw new RuntimeException('monitor api request failed: ' . $path);
+    }
+    $decoded = json_decode($raw, true);
+    if (!is_array($decoded)) {
+        throw new RuntimeException('monitor api invalid json: ' . $path);
+    }
+    return $decoded;
+}
+
 function toFloatOrNull($value): ?float
 {
     if (is_bool($value)) {
@@ -503,25 +539,45 @@ try {
     }
     $summaryRunId = is_string($_GET['summary_run_id'] ?? null) ? (string) $_GET['summary_run_id'] : '';
     if ($summaryRunId !== '') {
-        $summary = $service->getSummary($summaryRunId);
+        $summary = monitorApiRequest('/runs/' . rawurlencode($summaryRunId) . '/summary');
         header('Content-Type: application/json; charset=utf-8');
         echo json_encode($summary, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
         exit;
     }
     $proposalId = is_string($_GET['proposal_id'] ?? null) ? (string) $_GET['proposal_id'] : '';
     if ($proposalId !== '') {
-        $proposal = $service->getModelProposal($proposalId);
+        $proposal = monitorApiRequest('/model-proposals/' . rawurlencode($proposalId));
         header('Content-Type: application/json; charset=utf-8');
         echo json_encode($proposal, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
         exit;
     }
-    $runs = $service->listRuns(100);
-    $proposals = $service->listModelProposals(100);
-    $recentEvents = $service->listEvents(15);
-    $recentMetrics = $service->listMetrics(50);
-    $selectionPolicyProfile = envValue('V2_SELECTION_POLICY_PROFILE', 'default');
-    $selectionPolicy = policyConfigForProfile($selectionPolicyProfile);
-    $championBoard = buildChampionBoard($proposals, $runs, $selectionPolicy);
+    $runsPayload = monitorApiRequest('/runs?limit=100');
+    $proposalsPayload = monitorApiRequest('/proposals?limit=100');
+    $recentEventsPayload = monitorApiRequest('/events?limit=15');
+    $recentMetricsPayload = monitorApiRequest('/metrics?limit=50');
+    $globalChampionPayload = monitorApiRequest('/champion/global?top_n=5');
+    $shortlistPayload = monitorApiRequest('/models/shortlist?limit=5');
+
+    $runs = is_array($runsPayload['runs'] ?? null) ? $runsPayload['runs'] : [];
+    $proposals = is_array($proposalsPayload['proposals'] ?? null) ? $proposalsPayload['proposals'] : [];
+    $recentEvents = is_array($recentEventsPayload['events'] ?? null) ? $recentEventsPayload['events'] : [];
+    $recentMetrics = is_array($recentMetricsPayload['metrics'] ?? null) ? $recentMetricsPayload['metrics'] : [];
+    $latestRunId = count($runs) > 0 ? (string) ($runs[0]['run_id'] ?? '') : '';
+    $runChampionPayload = $latestRunId !== '' ? monitorApiRequest('/champion/run/' . rawurlencode($latestRunId) . '?top_n=5') : ['champion' => null, 'top_candidates' => []];
+    $referencesPayload = $latestRunId !== '' ? monitorApiRequest('/runs/' . rawurlencode($latestRunId) . '/references?limit=10') : ['references' => []];
+    $runSummaryPayload = $latestRunId !== '' ? monitorApiRequest('/runs/' . rawurlencode($latestRunId) . '/summary') : [];
+    $championBoard = [
+        'latest_run_id' => $latestRunId,
+        'policy_version' => (string) ($globalChampionPayload['policy_version'] ?? ''),
+        'policy_profile' => (string) ($globalChampionPayload['policy_profile'] ?? ''),
+        'champion_global' => $globalChampionPayload['champion'] ?? null,
+        'champion_run' => $runChampionPayload['champion'] ?? null,
+        'global_top' => is_array($globalChampionPayload['top_candidates'] ?? null) ? $globalChampionPayload['top_candidates'] : [],
+        'run_top' => is_array($runChampionPayload['top_candidates'] ?? null) ? $runChampionPayload['top_candidates'] : [],
+    ];
+    $modelShortlist = is_array($shortlistPayload['shortlist'] ?? null) ? $shortlistPayload['shortlist'] : [];
+    $referenceModels = is_array($referencesPayload['references'] ?? null) ? $referencesPayload['references'] : [];
+    $runSummary = is_array($runSummaryPayload) ? $runSummaryPayload : [];
 } catch (Throwable $error) {
     http_response_code(500);
     header('Content-Type: text/plain; charset=utf-8');
@@ -589,6 +645,71 @@ try {
         <?php if ($evalResult !== null): ?>
             <span class="notice">Models avaluats (KPIs): <?php echo (int) ($evalResult['evaluated_count'] ?? 0); ?></span>
         <?php endif; ?>
+    </div>
+
+    <h2>Run Summary</h2>
+    <div class="panel">
+        <?php $runCounts = is_array($runSummary['counts'] ?? null) ? $runSummary['counts'] : []; ?>
+        <?php $runProposalCounts = is_array($runSummary['proposals_by_status'] ?? null) ? $runSummary['proposals_by_status'] : []; ?>
+        <?php $runChampionSummary = is_array($runSummary['champion'] ?? null) ? $runSummary['champion'] : []; ?>
+        <div class="kpi">latest_run_id: <span class="mono"><?php echo htmlspecialchars((string) ($championBoard['latest_run_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span></div>
+        <div class="kpi">events=<?php echo (int) ($runCounts['events'] ?? 0); ?> · metrics=<?php echo (int) ($runCounts['metrics'] ?? 0); ?> · artifacts=<?php echo (int) ($runCounts['artifacts'] ?? 0); ?> · proposals=<?php echo (int) ($runCounts['proposals'] ?? 0); ?></div>
+        <div class="kpi">trained=<?php echo (int) ($runProposalCounts['trained'] ?? 0); ?> · accepted=<?php echo (int) ($runProposalCounts['accepted'] ?? 0); ?> · validated_phase0=<?php echo (int) ($runProposalCounts['validated_phase0'] ?? 0); ?></div>
+        <div class="kpi">champion: <span class="mono"><?php echo htmlspecialchars((string) (($runChampionSummary['proposal']['proposal_id'] ?? '') ?: (($runChampionSummary['proposal_id'] ?? '') ?: '')), ENT_QUOTES, 'UTF-8'); ?></span></div>
+    </div>
+
+    <h2>Prompt Transparency</h2>
+    <div class="panel">
+        <div class="kpi">reference_models_count: <?php echo (int) ($referencesPayload['reference_models_count'] ?? count($referenceModels)); ?></div>
+        <div class="kpi">reference_policy_version: <span class="mono"><?php echo htmlspecialchars((string) ($referencesPayload['reference_policy_version'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span></div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Proposal</th>
+                    <th>Score</th>
+                    <th>Role</th>
+                    <th>Reason</th>
+                </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($referenceModels as $index => $reference): ?>
+                <?php if (!is_array($reference)) { continue; } ?>
+                <tr>
+                    <td><?php echo htmlspecialchars((string) ($reference['proposal_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ($reference['score'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo $index === 0 ? 'top' : 'reference'; ?></td>
+                    <td><?php echo htmlspecialchars((string) ($reference['selection_reason'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+
+    <h2>Model Shortlist</h2>
+    <div class="panel">
+        <table>
+            <thead>
+                <tr>
+                    <th>Proposal</th>
+                    <th>Score</th>
+                    <th>Status</th>
+                    <th>Artifact</th>
+                    <th>Rationale</th>
+                </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($modelShortlist as $model): ?>
+                <?php if (!is_array($model)) { continue; } ?>
+                <tr>
+                    <td><?php echo htmlspecialchars((string) ($model['proposal_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ($model['score'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ($model['status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td class="mono"><?php echo htmlspecialchars((string) ($model['trained_model_uri'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ($model['rationale'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
     </div>
 
     <h2>Champion Board</h2>
