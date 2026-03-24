@@ -22,6 +22,7 @@ Document de desplegament real:
 - `scripts/run_generated_proposals_compile_check.py`: compila propostes d'un `run_id` i reporta errors de schema
 - `scripts/preview_selection_policy.py`: calcula ranking deterministic de models segons Selection Policy v1
 - `scripts/run_integration_matrix.py`: executa matriu d'integracio multi-run i genera report JSON+MD
+- `scripts/cleanup_inconsistent_state.py`: detecta i neteja estats inconsistents (`dry-run` / `apply`)
 - `scripts/test_api_retry_policy.py`: simula errors transitoris locals (503, 429, 200) per validar retries del client API
 - `scripts/p0_health_check.py`: comprovació P0 (API reachable, cues pendents encallades, resum PASS/FAIL)
 - `scripts/run_trainer_supervisor.py`: manté `run_trainer.py` actiu amb auto-restart i health check cada 5 minuts
@@ -57,6 +58,15 @@ Variables utiles de HTTP hardening:
 - `V2_API_MAX_RETRIES`
 - `V2_API_CIRCUIT_BREAKER_THRESHOLD`
 - `V2_API_CIRCUIT_BREAKER_COOLDOWN_SECONDS`
+
+Variables utiles de cleanup:
+
+- `V2_CLEANUP_MODE=dry-run|apply`
+- `V2_CLEANUP_STALE_RUN_MINUTES=10`
+- `V2_CLEANUP_STALE_RETRY_MINUTES=20`
+- `V2_CLEANUP_STALE_TRAINING_MINUTES=20`
+- `V2_CLEANUP_STALE_PHASE0_MINUTES=10`
+- `V2_CLEANUP_STALE_ACCEPTED_MINUTES=20`
 
 ## Flux curt recomanat (fase de proves)
 
