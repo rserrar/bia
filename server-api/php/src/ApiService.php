@@ -332,6 +332,61 @@ final class ApiService
         ];
     }
 
+    public function getRunTimeline(string $runId, int $limit = 200): array
+    {
+        $state = $this->store->readAll();
+        if (!isset($state['runs'][$runId])) {
+            throw new RuntimeException('run not found');
+        }
+        $events = $this->listRunEvents($runId, $limit);
+        $timeline = [];
+        foreach ($events as $event) {
+            $details = is_array($event['details'] ?? null) ? $event['details'] : [];
+            $timeline[] = [
+                'timestamp' => (string) ($event['timestamp'] ?? ''),
+                'type' => (string) ($event['event_type'] ?? ''),
+                'label' => (string) ($event['label'] ?? ''),
+                'level' => (string) ($event['level'] ?? 'info'),
+                'details' => $details,
+                'proposal_id' => (string) ($details['proposal_id'] ?? ''),
+                'epoch' => isset($details['epoch']) ? (int) $details['epoch'] : null,
+            ];
+        }
+        return [
+            'run_id' => $runId,
+            'timeline' => $timeline,
+        ];
+    }
+
+    public function getModelDetailView(string $proposalId): array
+    {
+        $proposal = $this->getModelProposal($proposalId);
+        $llmMetadata = is_array($proposal['llm_metadata'] ?? null) ? $proposal['llm_metadata'] : [];
+        $trainingKpis = is_array($llmMetadata['training_kpis'] ?? null) ? $llmMetadata['training_kpis'] : [];
+        $promptAudit = is_array($llmMetadata['prompt_audit'] ?? null) ? $llmMetadata['prompt_audit'] : [];
+        $score = isset($llmMetadata['champion_score']) ? (float) $llmMetadata['champion_score'] : null;
+        $decision = $this->evaluateProposalSelection($proposal, $this->policyConfigForProfile(getenv('V2_SELECTION_POLICY_PROFILE') ?: 'default'));
+        return [
+            'proposal_id' => (string) ($proposal['proposal_id'] ?? ''),
+            'source_run_id' => (string) ($proposal['source_run_id'] ?? ''),
+            'base_model_id' => (string) ($proposal['base_model_id'] ?? ''),
+            'status' => (string) ($proposal['status'] ?? ''),
+            'updated_at' => (string) ($proposal['updated_at'] ?? ''),
+            'trained_model_uri' => $llmMetadata['trained_model_uri'] ?? null,
+            'training_kpis' => $trainingKpis,
+            'prompt_audit' => $promptAudit,
+            'champion' => [
+                'active' => (bool) ($llmMetadata['champion_active'] ?? false),
+                'scope' => (string) ($llmMetadata['champion_scope'] ?? ''),
+                'score' => $score,
+                'policy_version' => (string) ($llmMetadata['champion_policy_version'] ?? ''),
+                'policy_profile' => (string) ($llmMetadata['champion_policy_profile'] ?? ''),
+            ],
+            'selection_view' => $decision,
+            'proposal_payload' => is_array($proposal['proposal'] ?? null) ? $proposal['proposal'] : [],
+        ];
+    }
+
     public function listRunEvents(string $runId, int $limit = 200): array
     {
         $state = $this->store->readAll();

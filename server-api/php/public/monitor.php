@@ -544,9 +544,16 @@ try {
         echo json_encode($summary, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
         exit;
     }
+    $timelineRunId = is_string($_GET['timeline_run_id'] ?? null) ? (string) $_GET['timeline_run_id'] : '';
+    if ($timelineRunId !== '') {
+        $timeline = monitorApiRequest('/runs/' . rawurlencode($timelineRunId) . '/timeline?limit=200');
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode($timeline, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+        exit;
+    }
     $proposalId = is_string($_GET['proposal_id'] ?? null) ? (string) $_GET['proposal_id'] : '';
     if ($proposalId !== '') {
-        $proposal = monitorApiRequest('/model-proposals/' . rawurlencode($proposalId));
+        $proposal = monitorApiRequest('/models/' . rawurlencode($proposalId) . '/detail-view');
         header('Content-Type: application/json; charset=utf-8');
         echo json_encode($proposal, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
         exit;
@@ -855,6 +862,7 @@ try {
                 <th>Code Version</th>
                 <th>Updated</th>
                 <th>Summary</th>
+                <th>Timeline</th>
             </tr>
         </thead>
         <tbody>
@@ -864,6 +872,7 @@ try {
                     $statusClass = 'status-' . htmlspecialchars($status, ENT_QUOTES, 'UTF-8');
                     $runId = htmlspecialchars((string) ($run['run_id'] ?? ''), ENT_QUOTES, 'UTF-8');
                     $summaryPath = './monitor.php?summary_run_id=' . rawurlencode((string) ($run['run_id'] ?? ''));
+                    $timelinePath = './monitor.php?timeline_run_id=' . rawurlencode((string) ($run['run_id'] ?? ''));
                 ?>
                 <tr>
                     <td><?php echo $runId; ?></td>
@@ -872,6 +881,7 @@ try {
                     <td><?php echo htmlspecialchars((string) ($run['code_version'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($run['updated_at'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><a href="<?php echo $summaryPath; ?>" target="_blank" rel="noreferrer">Veure summary</a></td>
+                    <td><a href="<?php echo $timelinePath; ?>" target="_blank" rel="noreferrer">Veure timeline</a></td>
                 </tr>
             <?php endforeach; ?>
         </tbody>
@@ -885,6 +895,8 @@ try {
                 <th>Source Run</th>
                 <th>Base Model</th>
                 <th>Updated</th>
+                <th>Score</th>
+                <th>KPI</th>
                 <th>Detail</th>
                 <th>Canviar status</th>
                 <th>Acció</th>
@@ -898,6 +910,8 @@ try {
                     $proposalId = (string) ($proposal['proposal_id'] ?? '');
                     $proposalIdEscaped = htmlspecialchars($proposalId, ENT_QUOTES, 'UTF-8');
                     $proposalDetailPath = './monitor.php?proposal_id=' . rawurlencode($proposalId);
+                    $proposalChampion = is_array($proposal['champion'] ?? null) ? $proposal['champion'] : [];
+                    $proposalKpis = is_array($proposal['training_kpis'] ?? null) ? $proposal['training_kpis'] : [];
                 ?>
                 <tr>
                     <td><?php echo $proposalIdEscaped; ?></td>
@@ -905,6 +919,8 @@ try {
                     <td><?php echo htmlspecialchars((string) ($proposal['source_run_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($proposal['base_model_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($proposal['updated_at'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ($proposalChampion['score'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ($proposalKpis['val_loss_total'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><a href="<?php echo $proposalDetailPath; ?>" target="_blank" rel="noreferrer">Veure proposta</a></td>
                     <td>
                         <form method="post" action="./monitor.php">

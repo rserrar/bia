@@ -21,6 +21,7 @@ Els clients del repo ja fan autodeteccio de prefix quan reben `404`.
 - `POST /runs/{run_id}/artifacts`
 - `GET /runs/{run_id}`
 - `GET /runs/{run_id}/summary`
+- `GET /runs/{run_id}/timeline`
 - `GET /runs/{run_id}/references`
 - `GET /model-proposals?limit=...`
 - `GET /proposals?limit=...`
@@ -28,6 +29,7 @@ Els clients del repo ja fan autodeteccio de prefix quan reben `404`.
 - `GET /champion/run/{run_id}`
 - `GET /champion/global`
 - `GET /models/shortlist`
+- `GET /models/{proposal_id}/detail-view`
 - `POST /model-proposals/{proposal_id}/status`
 - `POST /model-proposals/{proposal_id}/enqueue-phase0`
 - `POST /model-proposals/lock-for-training`
@@ -78,3 +80,20 @@ Increment 2 de productització:
 
 - `GET /runs/{id}/summary` inclou `summary_text`
 - `GET /champion/run/{id}` i `GET /champion/global` inclouen `delta_from_previous` i `primary_factors` a `top_candidates`
+
+Increment 3 de productització:
+
+- `GET /runs/{id}/timeline`
+  - timeline ordenada d'events per a monitor i frontend extern
+- `GET /models/{proposal_id}/detail-view`
+  - vista rica de model (`training_kpis`, `prompt_audit`, champion metadata, `selection_view`, payload base)
+
+Persistència actual al servidor (font per frontend):
+
+- `runs`
+- `events`
+- `metrics`
+- `artifacts`
+- `model_proposals`
+
+Els frontends han de consumir aquesta capa, no dependre de logs locals de Colab.

@@ -322,6 +322,15 @@ try {
         respond(200, $service->getSummary($parts[1]));
     }
 
+    if ($method === 'GET' && count($parts) === 3 && $parts[0] === 'runs' && $parts[2] === 'timeline') {
+        $limitParam = $_GET['limit'] ?? '200';
+        $limit = is_numeric($limitParam) ? (int) $limitParam : 200;
+        if ($limit <= 0) {
+            $limit = 200;
+        }
+        respond(200, $service->getRunTimeline($parts[1], $limit));
+    }
+
     if ($method === 'GET' && count($parts) === 3 && $parts[0] === 'runs' && $parts[2] === 'references') {
         $limitParam = $_GET['limit'] ?? '10';
         $limit = is_numeric($limitParam) ? (int) $limitParam : 10;
@@ -356,6 +365,10 @@ try {
             $limit = 10;
         }
         respond(200, $service->getModelsShortlist($limit));
+    }
+
+    if ($method === 'GET' && count($parts) === 3 && $parts[0] === 'models' && $parts[2] === 'detail-view') {
+        respond(200, $service->getModelDetailView($parts[1]));
     }
 
     if ($method === 'GET' && count($parts) === 3 && $parts[0] === 'runs' && $parts[2] === 'events') {
