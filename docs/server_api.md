@@ -69,5 +69,12 @@ Els endpoints nous de lectura estan pensats per monitor i futur frontend extern.
   - champion global + ranking global
 - `GET /runs/{id}/references`
   - transparència de prompt: quins models s'han passat al LLM
+  - inclou `role` (`top`, `reference`, `fallback`, `exploration`)
 - `GET /models/shortlist`
   - shortlist consumible directament per UI (score, rationale, artifact)
+  - inclou `primary_kpi`
+
+Increment 2 de productització:
+
+- `GET /runs/{id}/summary` inclou `summary_text`
+- `GET /champion/run/{id}` i `GET /champion/global` inclouen `delta_from_previous` i `primary_factors` a `top_candidates`

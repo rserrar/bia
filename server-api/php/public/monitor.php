@@ -656,6 +656,7 @@ try {
         <div class="kpi">events=<?php echo (int) ($runCounts['events'] ?? 0); ?> · metrics=<?php echo (int) ($runCounts['metrics'] ?? 0); ?> · artifacts=<?php echo (int) ($runCounts['artifacts'] ?? 0); ?> · proposals=<?php echo (int) ($runCounts['proposals'] ?? 0); ?></div>
         <div class="kpi">trained=<?php echo (int) ($runProposalCounts['trained'] ?? 0); ?> · accepted=<?php echo (int) ($runProposalCounts['accepted'] ?? 0); ?> · validated_phase0=<?php echo (int) ($runProposalCounts['validated_phase0'] ?? 0); ?></div>
         <div class="kpi">champion: <span class="mono"><?php echo htmlspecialchars((string) (($runChampionSummary['proposal']['proposal_id'] ?? '') ?: (($runChampionSummary['proposal_id'] ?? '') ?: '')), ENT_QUOTES, 'UTF-8'); ?></span></div>
+        <div class="kpi">summary: <?php echo htmlspecialchars((string) ($runSummary['summary_text'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
     </div>
 
     <h2>Prompt Transparency</h2>
@@ -677,7 +678,7 @@ try {
                 <tr>
                     <td><?php echo htmlspecialchars((string) ($reference['proposal_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($reference['score'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
-                    <td><?php echo $index === 0 ? 'top' : 'reference'; ?></td>
+                    <td><?php echo htmlspecialchars((string) ($reference['role'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($reference['selection_reason'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                 </tr>
             <?php endforeach; ?>
@@ -692,6 +693,7 @@ try {
                 <tr>
                     <th>Proposal</th>
                     <th>Score</th>
+                    <th>Primary KPI</th>
                     <th>Status</th>
                     <th>Artifact</th>
                     <th>Rationale</th>
@@ -703,6 +705,7 @@ try {
                 <tr>
                     <td><?php echo htmlspecialchars((string) ($model['proposal_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($model['score'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ($model['primary_kpi'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($model['status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td class="mono"><?php echo htmlspecialchars((string) ($model['trained_model_uri'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($model['rationale'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
@@ -785,6 +788,8 @@ try {
                         <th>Proposal</th>
                         <th>Status</th>
                         <th>Score</th>
+                        <th>Delta</th>
+                        <th>Factors</th>
                         <th>Reason</th>
                     </tr>
                 </thead>
@@ -793,11 +798,14 @@ try {
                     <?php
                         $proposal = is_array($entry['proposal'] ?? null) ? $entry['proposal'] : [];
                         $decision = is_array($entry['decision'] ?? null) ? $entry['decision'] : [];
+                        $factors = is_array($entry['primary_factors'] ?? null) ? $entry['primary_factors'] : [];
                     ?>
                     <tr>
                         <td><?php echo htmlspecialchars((string) ($proposal['proposal_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                         <td><?php echo htmlspecialchars((string) ($proposal['status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                         <td><?php echo htmlspecialchars((string) ($decision['score'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                        <td><?php echo htmlspecialchars((string) ($entry['delta_from_previous'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                        <td><?php echo htmlspecialchars(implode(', ', array_map(static fn(array $item): string => (string) ($item['name'] ?? ''), $factors)), ENT_QUOTES, 'UTF-8'); ?></td>
                         <td><?php echo htmlspecialchars((string) ($decision['selection_reason'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     </tr>
                 <?php endforeach; ?>
@@ -812,6 +820,8 @@ try {
                         <th>Proposal</th>
                         <th>Status</th>
                         <th>Score</th>
+                        <th>Delta</th>
+                        <th>Factors</th>
                         <th>Reason</th>
                     </tr>
                 </thead>
@@ -820,11 +830,14 @@ try {
                     <?php
                         $proposal = is_array($entry['proposal'] ?? null) ? $entry['proposal'] : [];
                         $decision = is_array($entry['decision'] ?? null) ? $entry['decision'] : [];
+                        $factors = is_array($entry['primary_factors'] ?? null) ? $entry['primary_factors'] : [];
                     ?>
                     <tr>
                         <td><?php echo htmlspecialchars((string) ($proposal['proposal_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                         <td><?php echo htmlspecialchars((string) ($proposal['status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                         <td><?php echo htmlspecialchars((string) ($decision['score'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                        <td><?php echo htmlspecialchars((string) ($entry['delta_from_previous'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                        <td><?php echo htmlspecialchars(implode(', ', array_map(static fn(array $item): string => (string) ($item['name'] ?? ''), $factors)), ENT_QUOTES, 'UTF-8'); ?></td>
                         <td><?php echo htmlspecialchars((string) ($decision['selection_reason'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     </tr>
                 <?php endforeach; ?>

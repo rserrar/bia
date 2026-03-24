@@ -205,6 +205,7 @@ final class ApiService
             ],
             'proposals_by_status' => $proposalsByStatus,
             'champion' => $champion['champion'] ?? null,
+            'summary_text' => $this->buildRunSummaryText($proposalsByStatus, $champion['champion'] ?? null, count($artifacts)),
             'latest_event' => count($events) > 0 ? $events[count($events) - 1] : null,
             'latest_metric' => count($metrics) > 0 ? $metrics[count($metrics) - 1] : null,
             'latest_artifact' => count($artifacts) > 0 ? $artifacts[count($artifacts) - 1] : null,
@@ -284,6 +285,12 @@ final class ApiService
             0,
             max(1, $limit)
         ));
+        foreach ($selected as $index => $reference) {
+            if (!is_array($reference)) {
+                continue;
+            }
+            $selected[$index]['role'] = $this->inferReferenceRole($reference, $index, count($selected));
+        }
         return [
             'run_id' => $runId,
             'reference_policy_version' => (string) ($promptAudit['reference_policy_version'] ?? ''),
@@ -315,6 +322,7 @@ final class ApiService
                 'trained_model_uri' => $llmMetadata['trained_model_uri'] ?? null,
                 'training_kpis' => $trainingKpis,
                 'rationale' => $this->buildShortRationale($decision, $trainingKpis),
+                'primary_kpi' => $trainingKpis['val_loss_total'] ?? null,
             ];
         }
         return [
@@ -821,8 +829,75 @@ final class ApiService
             'policy_version' => (string) ($policy['policy_version'] ?? 'selection_policy_v1_1'),
             'policy_profile' => (string) ($policy['profile'] ?? 'default'),
             'champion' => $champion,
-            'top_candidates' => array_slice($evaluated, 0, max(1, $topN)),
+            'top_candidates' => $this->attachCandidateDeltas(array_slice($evaluated, 0, max(1, $topN))),
         ];
+    }
+
+    private function attachCandidateDeltas(array $entries): array
+    {
+        $previousScore = null;
+        foreach ($entries as $index => $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $decision = is_array($entry['decision'] ?? null) ? $entry['decision'] : [];
+            $score = isset($decision['score']) ? (float) $decision['score'] : null;
+            $delta = null;
+            if ($index > 0 && $previousScore !== null && $score !== null) {
+                $delta = round($previousScore - $score, 4);
+            }
+            $entry['delta_from_previous'] = $delta;
+            $entry['primary_factors'] = $this->buildPrimaryFactors($decision);
+            $entries[$index] = $entry;
+            if ($score !== null) {
+                $previousScore = $score;
+            }
+        }
+        return $entries;
+    }
+
+    private function buildPrimaryFactors(array $decision): array
+    {
+        $normalized = is_array(($decision['score_breakdown'] ?? [])['normalized'] ?? null) ? ($decision['score_breakdown']['normalized']) : [];
+        $pairs = [];
+        foreach (['loss', 'time', 'stability', 'quality'] as $key) {
+            if (isset($normalized[$key])) {
+                $pairs[] = ['name' => $key, 'value' => (float) $normalized[$key]];
+            }
+        }
+        usort($pairs, static fn(array $a, array $b): int => $b['value'] <=> $a['value']);
+        return array_slice($pairs, 0, 2);
+    }
+
+    private function inferReferenceRole(array $reference, int $index, int $total): string
+    {
+        $reason = (string) ($reference['selection_reason'] ?? '');
+        if ($reason === 'local_fallback') {
+            return 'fallback';
+        }
+        if ($index === 0) {
+            return 'top';
+        }
+        if ($index === $total - 1 && $total > 2) {
+            return 'exploration';
+        }
+        return 'reference';
+    }
+
+    private function buildRunSummaryText(array $proposalsByStatus, $champion, int $artifactCount): string
+    {
+        $generated = array_sum($proposalsByStatus);
+        $trained = (int) ($proposalsByStatus['trained'] ?? 0);
+        $championId = '';
+        if (is_array($champion)) {
+            $championProposal = is_array($champion['proposal'] ?? null) ? $champion['proposal'] : [];
+            $championId = (string) ($championProposal['proposal_id'] ?? '');
+        }
+        $parts = ["generated {$generated}", "trained {$trained}", "artifacts {$artifactCount}"];
+        if ($championId !== '') {
+            $parts[] = "champion {$championId}";
+        }
+        return implode(' · ', $parts);
     }
 
     private function buildShortRationale(array $decision, array $trainingKpis): string
