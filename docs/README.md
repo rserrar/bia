@@ -14,3 +14,4 @@ Punt d'entrada unificat de documentacio V2.
 - Selection policy v1.1: `selection_policy_v1_1.md`
 - Clean state policy: `clean_state_policy.md`
 - Legacy inventory: `legacy_inventory.md`
+- Runbook: `runbook_operations.md`
