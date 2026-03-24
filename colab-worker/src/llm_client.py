@@ -135,58 +135,91 @@ class LlmProposalClient:
             prompt_text = prompt_builder.build_prompt(context)
         except Exception:
             prompt_text = json.dumps(context, ensure_ascii=False)
-        attempt_endpoint = endpoint
-        use_max_completion_tokens = False
-        retries_for_server_error = 2
-        max_tokens_override: int | None = None
-        data: dict[str, Any] = {}
-        content = ""
-        for _ in range(4):
-            payload = self._build_payload(attempt_endpoint, prompt_text, use_max_completion_tokens, max_tokens_override)
-            response = requests.post(
-                attempt_endpoint,
-                headers={
-                    "Authorization": f"Bearer {self.config.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-                timeout=self.config.timeout_seconds,
-            )
-            if response.status_code >= 400:
-                error_payload = {}
+        last_error: Exception | None = None
+        for generation_attempt in range(3):
+            attempt_endpoint = endpoint
+            use_max_completion_tokens = False
+            retries_for_server_error = 2
+            max_tokens_override: int | None = None
+            data: dict[str, Any] = {}
+            content = ""
+            for _ in range(4):
+                payload = self._build_payload(attempt_endpoint, prompt_text, use_max_completion_tokens, max_tokens_override)
                 try:
-                    error_payload = response.json()
-                except Exception:
+                    response = requests.post(
+                        attempt_endpoint,
+                        headers={
+                            "Authorization": f"Bearer {self.config.api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                        timeout=self.config.timeout_seconds,
+                    )
+                except requests.RequestException as error:
+                    last_error = error
+                    if generation_attempt < 2:
+                        time.sleep(2 + generation_attempt)
+                        break
+                    raise RuntimeError(f"OpenAI request failed: {error}") from error
+                if response.status_code >= 400:
                     error_payload = {}
-                error = error_payload.get("error", {}) if isinstance(error_payload, dict) else {}
-                error_message = str(error.get("message", "") or "")
-                error_code = str(error.get("code", "") or "")
-                is_chat_endpoint = attempt_endpoint.endswith("/chat/completions")
-                if is_chat_endpoint and "not a chat model" in error_message.lower():
-                    attempt_endpoint = "https://api.openai.com/v1/completions"
-                    continue
-                if error_code == "unsupported_parameter" and "max_tokens" in error_message and not use_max_completion_tokens:
-                    use_max_completion_tokens = True
-                    continue
-                if response.status_code >= 500 and retries_for_server_error > 0:
-                    retries_for_server_error -= 1
-                    time.sleep(1.5)
-                    continue
-                response.raise_for_status()
-            data = response.json()
-            content = self._extract_content_from_response(data, attempt_endpoint)
-            if content == "":
-                choices = data.get("choices") if isinstance(data, dict) else None
-                first_choice = choices[0] if isinstance(choices, list) and len(choices) > 0 and isinstance(choices[0], dict) else {}
-                finish_reason = str(first_choice.get("finish_reason", "") or "")
-                if finish_reason == "length":
-                    current_max = max_tokens_override if isinstance(max_tokens_override, int) and max_tokens_override > 0 else int(self.config.max_tokens)
-                    increased_cap = max(int(self.config.max_tokens) * 3, 12000)
-                    increased_max = min(max(current_max * 2, current_max + 1200), increased_cap)
-                    if increased_max > current_max:
-                        max_tokens_override = increased_max
+                    try:
+                        error_payload = response.json()
+                    except Exception:
+                        error_payload = {}
+                    error = error_payload.get("error", {}) if isinstance(error_payload, dict) else {}
+                    error_message = str(error.get("message", "") or "")
+                    error_code = str(error.get("code", "") or "")
+                    is_chat_endpoint = attempt_endpoint.endswith("/chat/completions")
+                    if is_chat_endpoint and "not a chat model" in error_message.lower():
+                        attempt_endpoint = "https://api.openai.com/v1/completions"
                         continue
-            break
+                    if error_code == "unsupported_parameter" and "max_tokens" in error_message and not use_max_completion_tokens:
+                        use_max_completion_tokens = True
+                        continue
+                    if response.status_code >= 500 and retries_for_server_error > 0:
+                        retries_for_server_error -= 1
+                        time.sleep(1.5)
+                        continue
+                    response.raise_for_status()
+                data = response.json()
+                content = self._extract_content_from_response(data, attempt_endpoint)
+                if content == "":
+                    choices = data.get("choices") if isinstance(data, dict) else None
+                    first_choice = choices[0] if isinstance(choices, list) and len(choices) > 0 and isinstance(choices[0], dict) else {}
+                    finish_reason = str(first_choice.get("finish_reason", "") or "")
+                    if finish_reason == "length":
+                        current_max = max_tokens_override if isinstance(max_tokens_override, int) and max_tokens_override > 0 else int(self.config.max_tokens)
+                        increased_cap = max(int(self.config.max_tokens) * 3, 12000)
+                        increased_max = min(max(current_max * 2, current_max + 1200), increased_cap)
+                        if increased_max > current_max:
+                            max_tokens_override = increased_max
+                            continue
+                try:
+                    extracted = self._extract_first_json_payload(content)
+                    parsed = json.loads(extracted)
+                    candidate = self._normalize_candidate_response(parsed, provider=self.config.provider)
+                    try:
+                        candidate = self._validate_candidate(candidate)
+                    except Exception as validation_error:
+                        repaired = self._repair_candidate_after_validation_error(candidate, str(validation_error), context)
+                        if repaired is None:
+                            raise
+                        candidate = self._validate_candidate(repaired)
+                    metadata = candidate.get("llm_metadata")
+                    metadata_payload = metadata if isinstance(metadata, dict) else {}
+                    metadata_payload["raw_response"] = data
+                    candidate["llm_metadata"] = metadata_payload
+                    self._attach_prompt_audit_metadata(candidate, context, prompt_text)
+                    return candidate
+                except (json.JSONDecodeError, RuntimeError) as error:
+                    last_error = error
+                    if generation_attempt < 2:
+                        time.sleep(2 + generation_attempt)
+                        break
+                    raise
+            if generation_attempt < 2:
+                continue
         if content == "":
             choices = data.get("choices") if isinstance(data, dict) else None
             first_choice = choices[0] if isinstance(choices, list) and len(choices) > 0 and isinstance(choices[0], dict) else {}
@@ -196,22 +229,9 @@ class LlmProposalClient:
                 f"OpenAI response content is empty (endpoint={attempt_endpoint}, "
                 f"finish_reason={finish_reason}, raw_preview={raw_preview})"
             )
-        extracted = self._extract_first_json_payload(content)
-        parsed = json.loads(extracted)
-        candidate = self._normalize_candidate_response(parsed, provider=self.config.provider)
-        try:
-            candidate = self._validate_candidate(candidate)
-        except Exception as validation_error:
-            repaired = self._repair_candidate_after_validation_error(candidate, str(validation_error), context)
-            if repaired is None:
-                raise
-            candidate = self._validate_candidate(repaired)
-        metadata = candidate.get("llm_metadata")
-        metadata_payload = metadata if isinstance(metadata, dict) else {}
-        metadata_payload["raw_response"] = data
-        candidate["llm_metadata"] = metadata_payload
-        self._attach_prompt_audit_metadata(candidate, context, prompt_text)
-        return candidate
+        if last_error is not None:
+            raise RuntimeError(f"OpenAI generation failed after retries: {last_error}") from last_error
+        raise RuntimeError("OpenAI generation failed without candidate after retries")
 
     def _attach_prompt_audit_metadata(self, candidate: dict[str, Any], context: dict[str, Any], prompt_text: str) -> None:
         metadata = candidate.get("llm_metadata")
