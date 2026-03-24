@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -166,6 +167,14 @@ class LlmProposalClient:
                         timeout=self.config.timeout_seconds,
                     )
                 except requests.RequestException as error:
+                    self._log_openai_attempt(
+                        prompt_text=prompt_text,
+                        response_data=None,
+                        error_message=f"request_exception: {error}",
+                        context=context,
+                        endpoint=attempt_endpoint,
+                        attempt=generation_attempt + 1,
+                    )
                     last_error = error
                     if generation_attempt < 2:
                         time.sleep(2 + generation_attempt)
@@ -188,6 +197,14 @@ class LlmProposalClient:
                         use_max_completion_tokens = True
                         continue
                     if response.status_code >= 500 and retries_for_server_error > 0:
+                        self._log_openai_attempt(
+                            prompt_text=prompt_text,
+                            response_data=error_payload if isinstance(error_payload, dict) else {"raw_text": response.text[:2000]},
+                            error_message=f"server_error_status={response.status_code}",
+                            context=context,
+                            endpoint=attempt_endpoint,
+                            attempt=generation_attempt + 1,
+                        )
                         retries_for_server_error -= 1
                         time.sleep(1.5)
                         continue
@@ -199,6 +216,14 @@ class LlmProposalClient:
                     first_choice = choices[0] if isinstance(choices, list) and len(choices) > 0 and isinstance(choices[0], dict) else {}
                     finish_reason = str(first_choice.get("finish_reason", "") or "")
                     if finish_reason == "length":
+                        self._log_openai_attempt(
+                            prompt_text=prompt_text,
+                            response_data=data,
+                            error_message=f"empty_content_finish_reason=length current_max={max_tokens_override or self.config.max_tokens}",
+                            context=context,
+                            endpoint=attempt_endpoint,
+                            attempt=generation_attempt + 1,
+                        )
                         current_max = max_tokens_override if isinstance(max_tokens_override, int) and max_tokens_override > 0 else int(self.config.max_tokens)
                         increased_cap = max(int(self.config.max_tokens) * 3, 12000)
                         increased_max = min(max(current_max * 2, current_max + 1200), increased_cap)
@@ -223,6 +248,14 @@ class LlmProposalClient:
                     self._attach_prompt_audit_metadata(candidate, context, prompt_text)
                     return candidate
                 except (json.JSONDecodeError, RuntimeError) as error:
+                    self._log_openai_attempt(
+                        prompt_text=prompt_text,
+                        response_data=data,
+                        error_message=f"parse_or_validation_error: {error}",
+                        context=context,
+                        endpoint=attempt_endpoint,
+                        attempt=generation_attempt + 1,
+                    )
                     last_error = error
                     if generation_attempt < 2:
                         time.sleep(2 + generation_attempt)
@@ -242,6 +275,45 @@ class LlmProposalClient:
         if last_error is not None:
             raise RuntimeError(f"OpenAI generation failed after retries: {last_error}") from last_error
         raise RuntimeError("OpenAI generation failed without candidate after retries")
+
+    def _log_openai_attempt(
+        self,
+        prompt_text: str,
+        response_data: dict[str, Any] | None,
+        error_message: str,
+        context: dict[str, Any],
+        endpoint: str,
+        attempt: int,
+    ) -> None:
+        logs_dir = Path("logs") / "llm_interactions"
+        try:
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+            generation = int(context.get("generation", 0)) if str(context.get("generation", "")).strip() != "" else 0
+            run_id = str(context.get("run_id", "unknown_run")).replace("/", "_")
+            filename = f"{ts}_{self.config.model.replace('/', '_')}_gen{generation}_attempt{attempt}_{run_id}.md"
+            path = logs_dir / filename
+            with path.open("w", encoding="utf-8") as handle:
+                handle.write(f"# OpenAI Attempt Log\n\n")
+                handle.write(f"- timestamp_utc: {datetime.utcnow().isoformat()}\n")
+                handle.write(f"- model: {self.config.model}\n")
+                handle.write(f"- endpoint: {endpoint}\n")
+                handle.write(f"- generation: {generation}\n")
+                handle.write(f"- run_id: {run_id}\n")
+                handle.write(f"- attempt: {attempt}\n")
+                handle.write(f"- error: {error_message}\n\n")
+                handle.write("## Prompt\n```text\n")
+                handle.write(prompt_text)
+                handle.write("\n```\n\n")
+                handle.write("## Response\n")
+                if isinstance(response_data, dict):
+                    handle.write("```json\n")
+                    handle.write(json.dumps(response_data, ensure_ascii=False, indent=2))
+                    handle.write("\n```\n")
+                else:
+                    handle.write("No structured response captured.\n")
+        except Exception:
+            return
 
     def _attach_prompt_audit_metadata(self, candidate: dict[str, Any], context: dict[str, Any], prompt_text: str) -> None:
         metadata = candidate.get("llm_metadata")
