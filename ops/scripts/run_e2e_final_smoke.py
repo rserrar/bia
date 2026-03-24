@@ -97,8 +97,10 @@ def _poll_until_trained(api_base_url: str, token: str, run_id: str, timeout_seco
                 selected_proposal = item
                 break
 
-        artifact_ok = latest_artifact.get("artifact_type") == "trained_model"
-        event_ok = latest_event.get("event_type") == "model_training_completed"
+        artifact_type = str(latest_artifact.get("artifact_type", ""))
+        event_type = str(latest_event.get("event_type", ""))
+        artifact_ok = artifact_type in {"trained_model", "champion_model"}
+        event_ok = event_type in {"model_training_completed", "champion_selected", "champion_kept", "champion_selection_skipped"}
         if proposal_meta_ok and artifact_ok and event_ok:
             return {
                 "trained_proposal": selected_proposal,

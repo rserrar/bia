@@ -44,7 +44,7 @@ Variables utiles de integration matrix:
 
 - `V2_MATRIX_MODE=plan|run`
 - `V2_MATRIX_RUNS=5`
-- `V2_MATRIX_PROFILES=small_test,default`
+- `V2_MATRIX_PROFILES=small_test`
 - `V2_MATRIX_GENERATIONS=1`
 - `V2_MATRIX_STALE_MINUTES=20`
 

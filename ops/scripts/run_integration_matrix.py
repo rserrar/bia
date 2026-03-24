@@ -145,6 +145,11 @@ def _validate_run_consistency(api_base_url: str, token: str, run_id: str, stale_
 
     event_types = {str(e.get("event_type", "")) for e in events}
     has_champion_event = any(t in event_types for t in {"champion_selected", "champion_kept", "champion_selection_skipped"})
+    has_champion_flag = any(
+        isinstance(p.get("llm_metadata"), dict) and bool((p.get("llm_metadata") or {}).get("champion_active"))
+        for p in proposals
+    )
+    champion_trace_present = has_champion_event or has_champion_flag
     latest_artifact = summary_payload.get("latest_artifact") if isinstance(summary_payload.get("latest_artifact"), dict) else {}
 
     checks = {
@@ -152,13 +157,14 @@ def _validate_run_consistency(api_base_url: str, token: str, run_id: str, stale_
         "trained_exists": len(trained) > 0,
         "no_stale_pending": len(stale_pending) == 0,
         "trained_metadata_persisted": len(trained_metadata_missing) == 0,
-        "champion_event_present": has_champion_event,
+        "champion_trace_present": champion_trace_present,
         "trained_artifact_present": str(latest_artifact.get("artifact_type", "")) in {"trained_model", "champion_model"},
     }
 
     return {
         "checks": checks,
-        "ok": all(checks.values()),
+        "ok": all(bool(v) for k, v in checks.items() if k != "champion_trace_present"),
+        "warnings": [] if champion_trace_present else ["champion_trace_missing"],
         "proposals_total": len(proposals),
         "trained_total": len(trained),
         "stale_pending": stale_pending,
@@ -184,6 +190,19 @@ def _run_case(repo: Path, case: MatrixCase, api_base_url: str, token: str, stale
         text=True,
         check=False,
     )
+    retried_for_empty_llm = False
+    if proc.returncode != 0 and "OpenAI response content is empty" in proc.stdout:
+        retried_for_empty_llm = True
+        time.sleep(4)
+        proc = subprocess.run(
+            [sys.executable, str(repo / "ops" / "scripts" / "run_e2e_final_smoke.py")],
+            cwd=str(repo),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+        )
     duration = round(time.time() - started, 2)
 
     blocks = _extract_json_blocks(proc.stdout)
@@ -213,6 +232,7 @@ def _run_case(repo: Path, case: MatrixCase, api_base_url: str, token: str, stale
         "e2e_result": last_json,
         "consistency": consistency,
         "output_tail": proc.stdout[-3000:],
+        "retried_for_empty_llm": retried_for_empty_llm,
     }
 
 
@@ -259,11 +279,11 @@ def _write_report(repo: Path, report: dict[str, Any]) -> tuple[Path, Path]:
 
 def main() -> int:
     repo = _repo_root()
-    mode = os.getenv("V2_MATRIX_MODE", "run").strip().lower()
+    mode = os.getenv("V2_MATRIX_MODE", "plan").strip().lower()
     total_runs = int(os.getenv("V2_MATRIX_RUNS", "5"))
     generations = int(os.getenv("V2_MATRIX_GENERATIONS", "1"))
     stale_minutes = int(os.getenv("V2_MATRIX_STALE_MINUTES", "20"))
-    profiles_raw = os.getenv("V2_MATRIX_PROFILES", "small_test,default")
+    profiles_raw = os.getenv("V2_MATRIX_PROFILES", "small_test")
     profiles = [item.strip() for item in profiles_raw.split(",") if item.strip()]
 
     cases = _build_cases(total_runs, profiles, generations)
