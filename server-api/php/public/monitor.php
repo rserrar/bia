@@ -553,11 +553,9 @@ try {
     }
     $compareLeft = is_string($_GET['compare_left'] ?? null) ? (string) $_GET['compare_left'] : '';
     $compareRight = is_string($_GET['compare_right'] ?? null) ? (string) $_GET['compare_right'] : '';
+    $comparison = null;
     if ($compareLeft !== '' && $compareRight !== '') {
         $comparison = monitorApiRequest('/models/compare?left=' . rawurlencode($compareLeft) . '&right=' . rawurlencode($compareRight));
-        header('Content-Type: application/json; charset=utf-8');
-        echo json_encode($comparison, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
-        exit;
     }
     $proposalId = is_string($_GET['proposal_id'] ?? null) ? (string) $_GET['proposal_id'] : '';
     if ($proposalId !== '') {
@@ -706,7 +704,7 @@ try {
     <h2>Model Shortlist</h2>
     <div class="panel">
         <?php if ($compareCandidateA !== '' && $compareCandidateB !== ''): ?>
-            <div class="kpi"><a href="./monitor.php?compare_left=<?php echo rawurlencode($compareCandidateA); ?>&compare_right=<?php echo rawurlencode($compareCandidateB); ?>" target="_blank" rel="noreferrer">Comparar top 2 models</a></div>
+            <div class="kpi"><a href="./monitor.php?compare_left=<?php echo rawurlencode($compareCandidateA); ?>&compare_right=<?php echo rawurlencode($compareCandidateB); ?>">Comparar top 2 models</a></div>
         <?php endif; ?>
         <table>
             <thead>
@@ -734,6 +732,38 @@ try {
             </tbody>
         </table>
     </div>
+
+    <?php if (is_array($comparison)): ?>
+        <?php
+            $leftModel = is_array($comparison['left'] ?? null) ? $comparison['left'] : [];
+            $rightModel = is_array($comparison['right'] ?? null) ? $comparison['right'] : [];
+            $comparisonDelta = is_array($comparison['comparison'] ?? null) ? $comparison['comparison'] : [];
+            $comparisonWinner = is_array($comparison['better_by'] ?? null) ? $comparison['better_by'] : [];
+        ?>
+        <h2>Model Comparison</h2>
+        <div class="panel-grid">
+            <div class="panel">
+                <h3>Left</h3>
+                <div class="kpi">proposal: <span class="mono"><?php echo htmlspecialchars((string) ($leftModel['proposal_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span></div>
+                <div class="kpi">status: <?php echo htmlspecialchars((string) ($leftModel['status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
+                <div class="kpi">score: <?php echo htmlspecialchars((string) (($leftModel['selection_view']['score'] ?? '') ?: (($leftModel['champion']['score'] ?? '') ?: '')), ENT_QUOTES, 'UTF-8'); ?></div>
+                <div class="kpi">artifact: <span class="mono"><?php echo htmlspecialchars((string) ($leftModel['trained_model_uri'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span></div>
+            </div>
+            <div class="panel">
+                <h3>Right</h3>
+                <div class="kpi">proposal: <span class="mono"><?php echo htmlspecialchars((string) ($rightModel['proposal_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span></div>
+                <div class="kpi">status: <?php echo htmlspecialchars((string) ($rightModel['status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
+                <div class="kpi">score: <?php echo htmlspecialchars((string) (($rightModel['selection_view']['score'] ?? '') ?: (($rightModel['champion']['score'] ?? '') ?: '')), ENT_QUOTES, 'UTF-8'); ?></div>
+                <div class="kpi">artifact: <span class="mono"><?php echo htmlspecialchars((string) ($rightModel['trained_model_uri'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span></div>
+            </div>
+        </div>
+        <div class="panel">
+            <div class="kpi">score_delta: <?php echo htmlspecialchars((string) ($comparisonDelta['score_delta'] ?? ''), ENT_QUOTES, 'UTF-8'); ?> · winner: <?php echo htmlspecialchars((string) ($comparisonWinner['score'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
+            <div class="kpi">val_loss_delta: <?php echo htmlspecialchars((string) ($comparisonDelta['val_loss_delta'] ?? ''), ENT_QUOTES, 'UTF-8'); ?> · winner: <?php echo htmlspecialchars((string) ($comparisonWinner['val_loss_total'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
+            <div class="kpi">training_time_delta: <?php echo htmlspecialchars((string) ($comparisonDelta['training_time_delta'] ?? ''), ENT_QUOTES, 'UTF-8'); ?> · winner: <?php echo htmlspecialchars((string) ($comparisonWinner['training_time_seconds'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
+            <div class="kpi">train_loss_delta: <?php echo htmlspecialchars((string) ($comparisonDelta['train_loss_delta'] ?? ''), ENT_QUOTES, 'UTF-8'); ?> · winner: <?php echo htmlspecialchars((string) ($comparisonWinner['train_loss'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
+        </div>
+    <?php endif; ?>
 
     <h2>Champion Board</h2>
     <div class="panel-grid">
