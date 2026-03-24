@@ -34,6 +34,11 @@ class WorkerConfig:
     api_path_prefix: str
     api_token: str
     api_timeout_seconds: int
+    api_connect_timeout_seconds: int
+    api_read_timeout_seconds: int
+    api_max_retries: int
+    api_circuit_breaker_threshold: int
+    api_circuit_breaker_cooldown_seconds: int
     code_version: str
     run_metadata: dict
     checkpoint_path: str
@@ -97,10 +102,15 @@ def load_worker_config() -> WorkerConfig:
             cleaned_endpoint = parts[0]
 
     return WorkerConfig(
+        api_timeout_seconds=int(os.getenv("V2_API_TIMEOUT_SECONDS", "20")),
+        api_connect_timeout_seconds=int(os.getenv("V2_API_CONNECT_TIMEOUT_SECONDS", os.getenv("V2_API_TIMEOUT_SECONDS", "20"))),
+        api_read_timeout_seconds=int(os.getenv("V2_API_READ_TIMEOUT_SECONDS", os.getenv("V2_API_TIMEOUT_SECONDS", "20"))),
+        api_max_retries=int(os.getenv("V2_API_MAX_RETRIES", "4")),
+        api_circuit_breaker_threshold=int(os.getenv("V2_API_CIRCUIT_BREAKER_THRESHOLD", "5")),
+        api_circuit_breaker_cooldown_seconds=int(os.getenv("V2_API_CIRCUIT_BREAKER_COOLDOWN_SECONDS", "20")),
         api_base_url=os.getenv("V2_API_BASE_URL", "http://localhost:8080"),
         api_path_prefix=os.getenv("V2_API_PATH_PREFIX", ""),
         api_token=os.getenv("V2_API_TOKEN", ""),
-        api_timeout_seconds=int(os.getenv("V2_API_TIMEOUT_SECONDS", "20")),
         code_version=os.getenv("V2_CODE_VERSION", "dev"),
         run_metadata={"executor": "colab"},
         checkpoint_path=os.getenv("V2_CHECKPOINT_PATH", "/content/drive/MyDrive/bia_v2/run_state.json"),

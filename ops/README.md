@@ -22,6 +22,7 @@ Document de desplegament real:
 - `scripts/run_generated_proposals_compile_check.py`: compila propostes d'un `run_id` i reporta errors de schema
 - `scripts/preview_selection_policy.py`: calcula ranking deterministic de models segons Selection Policy v1
 - `scripts/run_integration_matrix.py`: executa matriu d'integracio multi-run i genera report JSON+MD
+- `scripts/test_api_retry_policy.py`: simula errors transitoris locals (503, 429, 200) per validar retries del client API
 - `scripts/p0_health_check.py`: comprovació P0 (API reachable, cues pendents encallades, resum PASS/FAIL)
 - `scripts/run_trainer_supervisor.py`: manté `run_trainer.py` actiu amb auto-restart i health check cada 5 minuts
 - `scripts/run_e2e_final_smoke.py`: prova E2E final automàtica (trial LLM + trainer + validació trained/artifacts/metadata)
@@ -48,6 +49,14 @@ Variables utiles de integration matrix:
 - `V2_MATRIX_GENERATIONS=1`
 - `V2_MATRIX_STALE_MINUTES=20`
 - La matrix fixa per defecte `V2_LLM_MAX_TOKENS=6000` i `V2_LLM_NUM_REFERENCE_MODELS=2` per reduir truncaments a proves.
+
+Variables utiles de HTTP hardening:
+
+- `V2_API_CONNECT_TIMEOUT_SECONDS`
+- `V2_API_READ_TIMEOUT_SECONDS`
+- `V2_API_MAX_RETRIES`
+- `V2_API_CIRCUIT_BREAKER_THRESHOLD`
+- `V2_API_CIRCUIT_BREAKER_COOLDOWN_SECONDS`
 
 ## Flux curt recomanat (fase de proves)
 
