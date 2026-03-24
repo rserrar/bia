@@ -15,6 +15,7 @@ Aquesta carpeta `docs/` es el punt d'entrada unificat.
 - `docs/clean_state_policy.md`
 - `docs/legacy_inventory.md`
 - `docs/runbook_operations.md`
+- `docs/data_contract_frontend.md`
 - `docs/server_api.md`
 - `docs/operations.md`
 - `docs/observability.md`

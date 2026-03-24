@@ -371,6 +371,15 @@ try {
         respond(200, $service->getModelDetailView($parts[1]));
     }
 
+    if ($method === 'GET' && $parts === ['models', 'compare']) {
+        $left = is_string($_GET['left'] ?? null) ? (string) $_GET['left'] : '';
+        $right = is_string($_GET['right'] ?? null) ? (string) $_GET['right'] : '';
+        if ($left === '' || $right === '') {
+            respond(400, ['error' => 'left_and_right_required']);
+        }
+        respond(200, $service->compareModels($left, $right));
+    }
+
     if ($method === 'GET' && count($parts) === 3 && $parts[0] === 'runs' && $parts[2] === 'events') {
         $limitParam = $_GET['limit'] ?? '200';
         $limit = is_numeric($limitParam) ? (int) $limitParam : 200;

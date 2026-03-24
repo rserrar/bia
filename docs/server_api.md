@@ -30,6 +30,7 @@ Els clients del repo ja fan autodeteccio de prefix quan reben `404`.
 - `GET /champion/global`
 - `GET /models/shortlist`
 - `GET /models/{proposal_id}/detail-view`
+- `GET /models/compare?left=...&right=...`
 - `POST /model-proposals/{proposal_id}/status`
 - `POST /model-proposals/{proposal_id}/enqueue-phase0`
 - `POST /model-proposals/lock-for-training`
@@ -87,6 +88,8 @@ Increment 3 de productització:
   - timeline ordenada d'events per a monitor i frontend extern
 - `GET /models/{proposal_id}/detail-view`
   - vista rica de model (`training_kpis`, `prompt_audit`, champion metadata, `selection_view`, payload base)
+- `GET /models/compare`
+  - comparacio A/B de dos models ja resolta al backend
 
 Persistència actual al servidor (font per frontend):
 

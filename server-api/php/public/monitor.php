@@ -551,6 +551,14 @@ try {
         echo json_encode($timeline, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
         exit;
     }
+    $compareLeft = is_string($_GET['compare_left'] ?? null) ? (string) $_GET['compare_left'] : '';
+    $compareRight = is_string($_GET['compare_right'] ?? null) ? (string) $_GET['compare_right'] : '';
+    if ($compareLeft !== '' && $compareRight !== '') {
+        $comparison = monitorApiRequest('/models/compare?left=' . rawurlencode($compareLeft) . '&right=' . rawurlencode($compareRight));
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode($comparison, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+        exit;
+    }
     $proposalId = is_string($_GET['proposal_id'] ?? null) ? (string) $_GET['proposal_id'] : '';
     if ($proposalId !== '') {
         $proposal = monitorApiRequest('/models/' . rawurlencode($proposalId) . '/detail-view');
@@ -585,6 +593,8 @@ try {
     $modelShortlist = is_array($shortlistPayload['shortlist'] ?? null) ? $shortlistPayload['shortlist'] : [];
     $referenceModels = is_array($referencesPayload['references'] ?? null) ? $referencesPayload['references'] : [];
     $runSummary = is_array($runSummaryPayload) ? $runSummaryPayload : [];
+    $compareCandidateA = count($modelShortlist) > 0 && is_array($modelShortlist[0]) ? (string) ($modelShortlist[0]['proposal_id'] ?? '') : '';
+    $compareCandidateB = count($modelShortlist) > 1 && is_array($modelShortlist[1]) ? (string) ($modelShortlist[1]['proposal_id'] ?? '') : '';
 } catch (Throwable $error) {
     http_response_code(500);
     header('Content-Type: text/plain; charset=utf-8');
@@ -695,6 +705,9 @@ try {
 
     <h2>Model Shortlist</h2>
     <div class="panel">
+        <?php if ($compareCandidateA !== '' && $compareCandidateB !== ''): ?>
+            <div class="kpi"><a href="./monitor.php?compare_left=<?php echo rawurlencode($compareCandidateA); ?>&compare_right=<?php echo rawurlencode($compareCandidateB); ?>" target="_blank" rel="noreferrer">Comparar top 2 models</a></div>
+        <?php endif; ?>
         <table>
             <thead>
                 <tr>

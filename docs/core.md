@@ -30,6 +30,7 @@ L'objectiu practic actual es executar cicles curts, repetibles i auditables on e
 - `clean_state_policy.md`: politica de cleanup i criteris d'estat net abans d'un run.
 - `legacy_inventory.md`: inventari de peces legacy encara vives.
 - `runbook_operations.md`: cami canonic d'operacio per un tecnic.
+- `data_contract_frontend.md`: quines dades s'envien, es persisteixen i es serveixen a frontend.
 - `server_api.md`: contractes i comportament real d'endpoints.
 - `operations.md`: arrencada, parada i scripts operatius.
 - `observability.md`: visibilitat runtime i interpretacio rapida.
@@ -79,6 +80,10 @@ Per inventari de restes legacy a eliminar mes endavant:
 Per operacio diària i checklist final:
 
 <runbook_operations>
+
+Per contracte de dades frontend-ready:
+
+<data_contract_frontend>
 
 Per entendre el contracte real de l'API i metadades de proposals:
 

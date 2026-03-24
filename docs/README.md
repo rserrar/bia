@@ -15,3 +15,4 @@ Punt d'entrada unificat de documentacio V2.
 - Clean state policy: `clean_state_policy.md`
 - Legacy inventory: `legacy_inventory.md`
 - Runbook: `runbook_operations.md`
+- Frontend data contract: `data_contract_frontend.md`

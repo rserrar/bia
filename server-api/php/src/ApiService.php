@@ -387,6 +387,36 @@ final class ApiService
         ];
     }
 
+    public function compareModels(string $leftProposalId, string $rightProposalId): array
+    {
+        $left = $this->getModelDetailView($leftProposalId);
+        $right = $this->getModelDetailView($rightProposalId);
+
+        $leftKpis = is_array($left['training_kpis'] ?? null) ? $left['training_kpis'] : [];
+        $rightKpis = is_array($right['training_kpis'] ?? null) ? $right['training_kpis'] : [];
+        $leftSelection = is_array($left['selection_view'] ?? null) ? $left['selection_view'] : [];
+        $rightSelection = is_array($right['selection_view'] ?? null) ? $right['selection_view'] : [];
+
+        $comparison = [
+            'score_delta' => $this->deltaValue($leftSelection['score'] ?? null, $rightSelection['score'] ?? null),
+            'val_loss_delta' => $this->deltaValue($leftKpis['val_loss_total'] ?? null, $rightKpis['val_loss_total'] ?? null),
+            'training_time_delta' => $this->deltaValue($leftKpis['training_time_seconds'] ?? null, $rightKpis['training_time_seconds'] ?? null),
+            'train_loss_delta' => $this->deltaValue($leftKpis['train_loss'] ?? null, $rightKpis['train_loss'] ?? null),
+        ];
+
+        return [
+            'left' => $left,
+            'right' => $right,
+            'comparison' => $comparison,
+            'better_by' => [
+                'score' => $this->winnerLabel($leftSelection['score'] ?? null, $rightSelection['score'] ?? null, true),
+                'val_loss_total' => $this->winnerLabel($leftKpis['val_loss_total'] ?? null, $rightKpis['val_loss_total'] ?? null, false),
+                'training_time_seconds' => $this->winnerLabel($leftKpis['training_time_seconds'] ?? null, $rightKpis['training_time_seconds'] ?? null, false),
+                'train_loss' => $this->winnerLabel($leftKpis['train_loss'] ?? null, $rightKpis['train_loss'] ?? null, false),
+            ],
+        ];
+    }
+
     public function listRunEvents(string $runId, int $limit = 200): array
     {
         $state = $this->store->readAll();
@@ -968,5 +998,29 @@ final class ApiService
             $parts[] = 'time ' . number_format($time, 2, '.', '') . 's';
         }
         return implode(' · ', $parts);
+    }
+
+    private function deltaValue($left, $right): ?float
+    {
+        if (!is_numeric($left) || !is_numeric($right)) {
+            return null;
+        }
+        return round((float) $left - (float) $right, 4);
+    }
+
+    private function winnerLabel($left, $right, bool $higherIsBetter): string
+    {
+        if (!is_numeric($left) || !is_numeric($right)) {
+            return 'unknown';
+        }
+        $leftValue = (float) $left;
+        $rightValue = (float) $right;
+        if ($leftValue === $rightValue) {
+            return 'tie';
+        }
+        if ($higherIsBetter) {
+            return $leftValue > $rightValue ? 'left' : 'right';
+        }
+        return $leftValue < $rightValue ? 'left' : 'right';
     }
 }
