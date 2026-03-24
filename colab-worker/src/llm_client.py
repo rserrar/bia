@@ -136,12 +136,22 @@ class LlmProposalClient:
         except Exception:
             prompt_text = json.dumps(context, ensure_ascii=False)
         last_error: Exception | None = None
+        attempt_endpoint = endpoint
+        data: dict[str, Any] = {}
+        content = ""
+        base_prompt_text = prompt_text
+        repair_suffix = (
+            "\n\nIMPORTANT: Your previous answer was not valid JSON. "
+            "Return ONLY valid JSON with balanced brackets, double-quoted keys, no markdown fences, "
+            "no explanations, and no trailing text before or after the JSON payload."
+        )
         for generation_attempt in range(3):
+            prompt_text = base_prompt_text if generation_attempt == 0 else (base_prompt_text + repair_suffix)
             attempt_endpoint = endpoint
             use_max_completion_tokens = False
             retries_for_server_error = 2
             max_tokens_override: int | None = None
-            data: dict[str, Any] = {}
+            data = {}
             content = ""
             for _ in range(4):
                 payload = self._build_payload(attempt_endpoint, prompt_text, use_max_completion_tokens, max_tokens_override)
