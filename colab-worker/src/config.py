@@ -83,6 +83,10 @@ def load_worker_config() -> WorkerConfig:
     file_env_var = str(file_settings.get("openai_api_key_env_var", "")).strip()
     if file_api_key == "" and file_env_var:
         file_api_key = os.getenv(file_env_var, "").strip()
+    file_provider = str(file_settings.get("llm_provider", file_settings.get("provider", ""))).strip()
+    file_model = str(file_settings.get("openai_model_name", file_settings.get("model", ""))).strip()
+    file_temperature = file_settings.get("temperature", 0.2)
+    file_max_tokens = file_settings.get("max_tokens", 6000)
 
     raw_endpoint = os.getenv("V2_LLM_ENDPOINT", "")
     cleaned_endpoint = raw_endpoint.strip().replace("`", "").strip().strip("'").strip('"').strip()
@@ -107,13 +111,13 @@ def load_worker_config() -> WorkerConfig:
         bootstrap_seed_model_if_empty=os.getenv("V2_BOOTSTRAP_SEED_MODEL_IF_EMPTY", "true").lower() in {"1", "true", "yes"},
         llm_enabled=os.getenv("V2_LLM_ENABLED", "false").lower() in {"1", "true", "yes"},
         llm_use_legacy_interface=os.getenv("V2_LLM_USE_LEGACY_INTERFACE", "true").lower() in {"1", "true", "yes"},
-        llm_provider=os.getenv("V2_LLM_PROVIDER", "mock"),
+        llm_provider=os.getenv("V2_LLM_PROVIDER", file_provider or "mock"),
         llm_endpoint=cleaned_endpoint,
         llm_api_key=os.getenv("V2_LLM_API_KEY", file_api_key),
-        llm_model=os.getenv("V2_LLM_MODEL", "gpt-5.4"),
+        llm_model=os.getenv("V2_LLM_MODEL", file_model or "gpt-5.4"),
         llm_timeout_seconds=int(os.getenv("V2_LLM_TIMEOUT_SECONDS", "45")),
-        llm_temperature=float(os.getenv("V2_LLM_TEMPERATURE", "0.2")),
-        llm_max_tokens=int(os.getenv("V2_LLM_MAX_TOKENS", "700")),
+        llm_temperature=float(os.getenv("V2_LLM_TEMPERATURE", str(file_temperature))),
+        llm_max_tokens=int(os.getenv("V2_LLM_MAX_TOKENS", str(file_max_tokens))),
         llm_system_prompt=os.getenv(
             "V2_LLM_SYSTEM_PROMPT",
             "Return only a JSON object with keys base_model_id and proposal.",

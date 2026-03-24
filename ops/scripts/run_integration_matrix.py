@@ -179,6 +179,8 @@ def _run_case(repo: Path, case: MatrixCase, api_base_url: str, token: str, stale
     env["V2_SELECTION_POLICY_PROFILE"] = case.profile
     env["V2_E2E_GENERATIONS"] = str(case.generations)
     env.setdefault("V2_E2E_TRAIN_TIMEOUT_SECONDS", "1200")
+    env.setdefault("V2_LLM_MAX_TOKENS", "6000")
+    env.setdefault("V2_LLM_NUM_REFERENCE_MODELS", "2")
 
     started = time.time()
     proc = subprocess.run(

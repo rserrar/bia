@@ -181,7 +181,8 @@ class LlmProposalClient:
                 finish_reason = str(first_choice.get("finish_reason", "") or "")
                 if finish_reason == "length":
                     current_max = max_tokens_override if isinstance(max_tokens_override, int) and max_tokens_override > 0 else int(self.config.max_tokens)
-                    increased_max = min(max(current_max * 2, current_max + 400), 4000)
+                    increased_cap = max(int(self.config.max_tokens) * 3, 12000)
+                    increased_max = min(max(current_max * 2, current_max + 1200), increased_cap)
                     if increased_max > current_max:
                         max_tokens_override = increased_max
                         continue

@@ -47,6 +47,7 @@ Variables utiles de integration matrix:
 - `V2_MATRIX_PROFILES=small_test`
 - `V2_MATRIX_GENERATIONS=1`
 - `V2_MATRIX_STALE_MINUTES=20`
+- La matrix fixa per defecte `V2_LLM_MAX_TOKENS=6000` i `V2_LLM_NUM_REFERENCE_MODELS=2` per reduir truncaments a proves.
 
 ## Flux curt recomanat (fase de proves)
 
