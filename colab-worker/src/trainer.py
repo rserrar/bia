@@ -10,13 +10,16 @@ from shared.utils.selection_policy import evaluate_reference_candidate, load_pol
 
 try:
     import tensorflow as tf
-    from tensorflow.keras.callbacks import Callback as KerasCallback
+    from tensorflow.keras.callbacks import Callback as _ImportedKerasCallback
+    KerasCallback = cast(Any, _ImportedKerasCallback)
 except ImportError:
     tf = None
 
     class KerasCallback:  # type: ignore[no-redef]
         def __init__(self, *args, **kwargs):
             pass
+
+        model: Any = None
 
 from src.api_client import ApiClient
 
@@ -45,7 +48,7 @@ def _resolve_repo_path(path_str: str, repo_root: Path) -> Path:
 
 # A callback that prints out epoch progression visibly and gracefully stops 
 # the training if it exceeds a specified max time limit.
-class TrainerFeedbackAndLimitCallback(KerasCallback):
+class TrainerFeedbackAndLimitCallback(KerasCallback):  # type: ignore[misc]
     def __init__(
         self,
         proposal_id: str,
@@ -59,6 +62,7 @@ class TrainerFeedbackAndLimitCallback(KerasCallback):
         self.start_time = 0.0
         self.api = api_client
         self.run_id = run_id
+        self.model = None
 
     def _emit_event(self, event_type: str, label: str, details: dict[str, Any] | None = None) -> None:
         if self.api is None or self.run_id.strip() == "":
@@ -119,7 +123,9 @@ class TrainerFeedbackAndLimitCallback(KerasCallback):
                     "max_training_seconds": self.max_training_seconds,
                 },
             )
-            self.model.stop_training = True
+            model = getattr(self, "model", None)
+            if model is not None:
+                model.stop_training = True
 
 class ModelTrainerEngine:
     def __init__(self, api_client: ApiClient, config: dict[str, Any]):
@@ -302,18 +308,35 @@ class ModelTrainerEngine:
             trained_model_path = trained_models_dir / f"{proposal_id}.keras"
             keras_model.save(str(trained_model_path))
             model_storage = "drive" if "/content/drive" in str(trained_model_path).replace("\\", "/") else "local"
+            artifact_record = None
             print(f"📡 API: pujant artifact trained_model per {proposal_id}...")
             try:
-                self.api.add_artifact(
+                artifact_record = self.api.upload_artifact_file(
                     run_id,
                     artifact_type="trained_model",
-                    uri=str(trained_model_path),
-                    storage=model_storage,
-                    metadata={"proposal_id": proposal_id, "trainer_id": self.trainer_id},
+                    file_path=str(trained_model_path),
+                    metadata={
+                        "proposal_id": proposal_id,
+                        "trainer_id": self.trainer_id,
+                        "source_storage": model_storage,
+                        "source_uri": str(trained_model_path),
+                    },
                 )
                 print("✅ API: artifact registrat")
             except Exception as artifact_error:
-                print(f"⚠️ API: no s'ha pogut registrar artifact ({artifact_error})")
+                print(f"⚠️ API: upload a servidor no disponible, es registra artifact local ({artifact_error})")
+                try:
+                    artifact_record = self.api.add_artifact(
+                        run_id,
+                        artifact_type="trained_model",
+                        uri=str(trained_model_path),
+                        storage=model_storage,
+                        metadata={"proposal_id": proposal_id, "trainer_id": self.trainer_id},
+                    )
+                except Exception as fallback_artifact_error:
+                    print(f"⚠️ API: no s'ha pogut registrar artifact local ({fallback_artifact_error})")
+
+            artifact_metadata = artifact_record.get("metadata", {}) if isinstance(artifact_record, dict) and isinstance(artifact_record.get("metadata"), dict) else {}
 
             # Ens assegurem de notificar a l'API V2
             print(f"📡 API: actualitzant status a trained per {proposal_id}...")
@@ -322,6 +345,9 @@ class ModelTrainerEngine:
                 "training_time": elapsed,
                 "total_epochs_trained": len(history.history['loss']),
                 "trained_model_uri": str(trained_model_path),
+                "trained_model_server_artifact_id": artifact_metadata.get("artifact_id"),
+                "trained_model_download_url": artifact_metadata.get("download_url"),
+                "trained_model_availability": artifact_metadata.get("availability_status"),
             })
             print("✅ API: status trained actualitzat")
 
@@ -477,17 +503,26 @@ class ModelTrainerEngine:
             return
 
         champion_uri = f"champion://{self.champion_scope}/{best_id}"
+        best_metadata_raw = best_proposal.get("llm_metadata")
+        best_metadata = best_metadata_raw if isinstance(best_metadata_raw, dict) else {}
+        champion_storage = "local"
+        if isinstance(best_metadata.get("trained_model_server_artifact_id"), str) and str(best_metadata.get("trained_model_server_artifact_id", "")).strip() != "":
+            champion_storage = "server"
+            champion_uri = str(best_metadata.get("trained_model_download_url") or champion_uri)
         try:
             self.api.add_artifact(
                 run_id,
                 artifact_type="champion_model",
                 uri=champion_uri,
-                storage="local",
+                storage=champion_storage,
                 metadata={
                     "proposal_id": best_id,
                     "scope": self.champion_scope,
                     "score": best_score,
                     "policy_version": self.selection_policy_config.get("policy_version", "selection_policy_v1"),
+                    "linked_artifact_id": best_metadata.get("trained_model_server_artifact_id"),
+                    "download_url": best_metadata.get("trained_model_download_url"),
+                    "availability_status": best_metadata.get("trained_model_availability"),
                 },
             )
         except Exception as error:

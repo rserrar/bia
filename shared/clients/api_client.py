@@ -3,6 +3,8 @@ from __future__ import annotations
 import random
 import re
 import time
+import base64
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -237,6 +239,22 @@ class ApiClient:
         if checksum:
             payload["checksum"] = checksum
         return self._request("POST", f"/runs/{run_id}/artifacts", payload)
+
+    def upload_artifact_file(
+        self,
+        run_id: str,
+        artifact_type: str,
+        file_path: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        path = Path(file_path)
+        payload = {
+            "artifact_type": artifact_type,
+            "file_name": path.name,
+            "content_base64": base64.b64encode(path.read_bytes()).decode("ascii"),
+            "metadata": metadata or {},
+        }
+        return self._request("POST", f"/runs/{run_id}/artifacts/upload", payload)
 
     def maintenance_watchdog(self, stale_after_seconds: int) -> dict[str, Any]:
         return self._request("POST", "/maintenance/watchdog", {"stale_after_seconds": stale_after_seconds})

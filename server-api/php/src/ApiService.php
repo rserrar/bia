@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace V2ServerApi;
 
-use RuntimeException;
 use InvalidArgumentException;
+use RuntimeException;
 
 final class ApiService
 {
@@ -99,6 +99,8 @@ final class ApiService
 
     public function addArtifact(string $runId, string $artifactType, string $uri, string $storage = 'drive', ?string $checksum = null, array $metadata = []): array
     {
+        $artifactId = (string) ($metadata['artifact_id'] ?? ('art_' . substr(bin2hex(random_bytes(8)), 0, 12)));
+        $metadata['artifact_id'] = $artifactId;
         $artifact = [
             'run_id' => $runId,
             'artifact_type' => $artifactType,
@@ -110,6 +112,36 @@ final class ApiService
         ];
         $this->store->appendArtifact($artifact);
         return $artifact;
+    }
+
+    public function uploadArtifact(string $runId, string $artifactType, string $fileName, string $contentBase64, array $metadata = []): array
+    {
+        $artifactId = 'art_' . substr(bin2hex(random_bytes(8)), 0, 12);
+        $safeFileName = preg_replace('/[^A-Za-z0-9._-]/', '_', $fileName) ?: ($artifactId . '.bin');
+        $decoded = base64_decode($contentBase64, true);
+        if ($decoded === false) {
+            throw new RuntimeException('invalid base64 artifact content');
+        }
+        $storageDir = $this->artifactStorageDir() . DIRECTORY_SEPARATOR . $runId;
+        if (!is_dir($storageDir) && !mkdir($storageDir, 0777, true) && !is_dir($storageDir)) {
+            throw new RuntimeException('could not create artifact storage directory');
+        }
+        $absolutePath = $storageDir . DIRECTORY_SEPARATOR . $artifactId . '__' . $safeFileName;
+        if (file_put_contents($absolutePath, $decoded) === false) {
+            throw new RuntimeException('could not persist artifact content');
+        }
+        $checksum = hash_file('sha256', $absolutePath) ?: null;
+        $metadata = array_merge(
+            $metadata,
+            [
+                'artifact_id' => $artifactId,
+                'file_name' => $safeFileName,
+                'storage_backend' => 'server',
+                'download_url' => '/artifacts/' . $artifactId . '/download',
+                'availability_status' => 'available',
+            ]
+        );
+        return $this->addArtifact($runId, $artifactType, $absolutePath, 'server', $checksum, $metadata);
     }
 
     public function getRun(string $runId): array
@@ -218,6 +250,8 @@ final class ApiService
         $enriched = [];
         foreach ($proposals as $proposal) {
             $llmMetadata = is_array($proposal['llm_metadata'] ?? null) ? $proposal['llm_metadata'] : [];
+            $artifacts = $this->getModelArtifacts((string) ($proposal['proposal_id'] ?? ''))['artifacts'];
+            $primaryArtifact = count($artifacts) > 0 && is_array($artifacts[0]) ? $artifacts[0] : [];
             $enriched[] = [
                 'proposal_id' => (string) ($proposal['proposal_id'] ?? ''),
                 'status' => (string) ($proposal['status'] ?? ''),
@@ -227,6 +261,8 @@ final class ApiService
                 'trained_model_uri' => $llmMetadata['trained_model_uri'] ?? null,
                 'training_kpis' => is_array($llmMetadata['training_kpis'] ?? null) ? $llmMetadata['training_kpis'] : [],
                 'prompt_audit' => is_array($llmMetadata['prompt_audit'] ?? null) ? $llmMetadata['prompt_audit'] : [],
+                'artifacts' => $artifacts,
+                'primary_artifact' => $primaryArtifact,
                 'champion' => [
                     'active' => (bool) ($llmMetadata['champion_active'] ?? false),
                     'scope' => (string) ($llmMetadata['champion_scope'] ?? ''),
@@ -323,12 +359,33 @@ final class ApiService
                 'training_kpis' => $trainingKpis,
                 'rationale' => $this->buildShortRationale($decision, $trainingKpis),
                 'primary_kpi' => $trainingKpis['val_loss_total'] ?? null,
+                'artifacts' => $this->getModelArtifacts((string) ($proposal['proposal_id'] ?? ''))['artifacts'],
             ];
         }
         return [
             'policy_version' => $payload['policy_version'] ?? 'selection_policy_v1_1',
             'policy_profile' => $payload['policy_profile'] ?? 'default',
             'shortlist' => $shortlist,
+        ];
+    }
+
+    public function getModelArtifacts(string $proposalId): array
+    {
+        $proposal = $this->getModelProposal($proposalId);
+        $runId = (string) ($proposal['source_run_id'] ?? '');
+        $state = $this->store->readAll();
+        $artifacts = array_values(array_filter(
+            is_array($state['artifacts'] ?? null) ? $state['artifacts'] : [],
+            static function (array $artifact) use ($proposalId, $runId): bool {
+                $metadata = is_array($artifact['metadata'] ?? null) ? $artifact['metadata'] : [];
+                return (string) ($artifact['run_id'] ?? '') === $runId
+                    && (string) ($metadata['proposal_id'] ?? '') === $proposalId;
+            }
+        ));
+
+        return [
+            'proposal_id' => $proposalId,
+            'artifacts' => array_map(fn(array $artifact): array => $this->normalizeArtifactView($artifact), $artifacts),
         ];
     }
 
@@ -382,6 +439,7 @@ final class ApiService
                 'policy_version' => (string) ($llmMetadata['champion_policy_version'] ?? ''),
                 'policy_profile' => (string) ($llmMetadata['champion_policy_profile'] ?? ''),
             ],
+            'artifacts' => $this->getModelArtifacts($proposalId)['artifacts'],
             'selection_view' => $decision,
             'proposal_payload' => is_array($proposal['proposal'] ?? null) ? $proposal['proposal'] : [],
         ];
@@ -415,6 +473,31 @@ final class ApiService
                 'train_loss' => $this->winnerLabel($leftKpis['train_loss'] ?? null, $rightKpis['train_loss'] ?? null, false),
             ],
         ];
+    }
+
+    public function getArtifactDownloadInfo(string $artifactId): array
+    {
+        $state = $this->store->readAll();
+        $artifacts = is_array($state['artifacts'] ?? null) ? $state['artifacts'] : [];
+        foreach ($artifacts as $artifact) {
+            $metadata = is_array($artifact['metadata'] ?? null) ? $artifact['metadata'] : [];
+            if ((string) ($metadata['artifact_id'] ?? '') !== $artifactId) {
+                continue;
+            }
+            $normalized = $this->normalizeArtifactView($artifact);
+            if ((string) ($normalized['storage_backend'] ?? '') !== 'server') {
+                throw new RuntimeException('artifact is not server-downloadable');
+            }
+            if ((string) ($normalized['availability_status'] ?? '') !== 'available') {
+                throw new RuntimeException('artifact not available');
+            }
+            return [
+                'path' => (string) ($artifact['uri'] ?? ''),
+                'file_name' => (string) ($metadata['file_name'] ?? basename((string) ($artifact['uri'] ?? 'artifact.bin'))),
+                'mime_type' => 'application/octet-stream',
+            ];
+        }
+        throw new RuntimeException('artifact not found');
     }
 
     public function listRunEvents(string $runId, int $limit = 200): array
@@ -998,6 +1081,37 @@ final class ApiService
             $parts[] = 'time ' . number_format($time, 2, '.', '') . 's';
         }
         return implode(' · ', $parts);
+    }
+
+    private function normalizeArtifactView(array $artifact): array
+    {
+        $metadata = is_array($artifact['metadata'] ?? null) ? $artifact['metadata'] : [];
+        $storageBackend = (string) ($metadata['storage_backend'] ?? ($artifact['storage'] ?? 'unknown'));
+        $artifactUri = (string) ($artifact['uri'] ?? '');
+        $availability = (string) ($metadata['availability_status'] ?? 'unknown');
+        if ($storageBackend === 'server') {
+            $availability = is_file($artifactUri) ? 'available' : 'missing';
+        }
+        return [
+            'artifact_id' => (string) ($metadata['artifact_id'] ?? ''),
+            'artifact_type' => (string) ($artifact['artifact_type'] ?? ''),
+            'storage_backend' => $storageBackend,
+            'artifact_uri' => $artifactUri,
+            'download_url' => (string) ($metadata['download_url'] ?? ''),
+            'availability_status' => $availability,
+            'checksum' => $artifact['checksum'] ?? null,
+            'timestamp' => (string) ($artifact['timestamp'] ?? ''),
+            'metadata' => $metadata,
+        ];
+    }
+
+    private function artifactStorageDir(): string
+    {
+        $configured = getenv('V2_SERVER_ARTIFACTS_DIR');
+        if (is_string($configured) && trim($configured) !== '') {
+            return trim($configured);
+        }
+        return dirname(__DIR__) . '/../storage/artifacts';
     }
 
     private function deltaValue($left, $right): ?float

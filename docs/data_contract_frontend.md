@@ -92,6 +92,29 @@ Backends disponibles:
 - JSON state store
 - SQLite state store
 
+## Artifact policy
+
+Backend canonic actual:
+
+- servidor (`storage/artifacts/...`) quan l'upload a servidor funciona
+
+Drive/local:
+
+- es pot continuar usant com a origen temporal o copia local d'entrenament,
+- pero no ha de ser la font principal per al frontend.
+
+Metadata d'artifact exposada a frontend:
+
+- `artifact_id`
+- `artifact_type`
+- `storage_backend`
+- `artifact_uri`
+- `download_url`
+- `availability_status`
+- `checksum`
+- `timestamp`
+- `metadata`
+
 ## Frontend-ready read endpoints
 
 - `GET /runs`
@@ -105,6 +128,14 @@ Backends disponibles:
 - `GET /models/shortlist`
 - `GET /models/{proposal_id}/detail-view`
 - `GET /models/compare?left=...&right=...`
+- `GET /models/{proposal_id}/artifacts`
+- `GET /artifacts/{artifact_id}/download`
+
+Upload intern actual:
+
+- `POST /runs/{run_id}/artifacts/upload`
+
+Aquest endpoint permet persistir una copia del model entrenat al servidor i evitar dependencia del path local de Colab.
 
 ## What is not canonical for UI
 

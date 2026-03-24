@@ -31,9 +31,12 @@ Els clients del repo ja fan autodeteccio de prefix quan reben `404`.
 - `GET /models/shortlist`
 - `GET /models/{proposal_id}/detail-view`
 - `GET /models/compare?left=...&right=...`
+- `GET /models/{proposal_id}/artifacts`
+- `GET /artifacts/{artifact_id}/download`
 - `POST /model-proposals/{proposal_id}/status`
 - `POST /model-proposals/{proposal_id}/enqueue-phase0`
 - `POST /model-proposals/lock-for-training`
+- `POST /runs/{run_id}/artifacts/upload`
 - `POST /maintenance/process-model-proposals-phase0`
 
 ## Metadata behavior (critical)

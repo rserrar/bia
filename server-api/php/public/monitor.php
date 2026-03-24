@@ -714,18 +714,27 @@ try {
                     <th>Primary KPI</th>
                     <th>Status</th>
                     <th>Artifact</th>
+                    <th>Availability</th>
+                    <th>Download</th>
                     <th>Rationale</th>
                 </tr>
             </thead>
             <tbody>
             <?php foreach ($modelShortlist as $model): ?>
                 <?php if (!is_array($model)) { continue; } ?>
+                <?php $artifact = (count($model['artifacts'] ?? []) > 0 && is_array($model['artifacts'][0] ?? null)) ? $model['artifacts'][0] : []; ?>
                 <tr>
                     <td><?php echo htmlspecialchars((string) ($model['proposal_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($model['score'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($model['primary_kpi'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($model['status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td class="mono"><?php echo htmlspecialchars((string) ($model['trained_model_uri'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ($artifact['availability_status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td>
+                        <?php if ((string) ($artifact['download_url'] ?? '') !== ''): ?>
+                            <a href="./index.php<?php echo htmlspecialchars((string) ($artifact['download_url'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>" target="_blank" rel="noreferrer">Descarregar</a>
+                        <?php endif; ?>
+                    </td>
                     <td><?php echo htmlspecialchars((string) ($model['rationale'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                 </tr>
             <?php endforeach; ?>
@@ -940,6 +949,9 @@ try {
                 <th>Updated</th>
                 <th>Score</th>
                 <th>KPI</th>
+                <th>Artifact</th>
+                <th>Availability</th>
+                <th>Download</th>
                 <th>Detail</th>
                 <th>Canviar status</th>
                 <th>Acció</th>
@@ -955,6 +967,7 @@ try {
                     $proposalDetailPath = './monitor.php?proposal_id=' . rawurlencode($proposalId);
                     $proposalChampion = is_array($proposal['champion'] ?? null) ? $proposal['champion'] : [];
                     $proposalKpis = is_array($proposal['training_kpis'] ?? null) ? $proposal['training_kpis'] : [];
+                    $primaryArtifact = is_array($proposal['primary_artifact'] ?? null) ? $proposal['primary_artifact'] : [];
                 ?>
                 <tr>
                     <td><?php echo $proposalIdEscaped; ?></td>
@@ -964,6 +977,13 @@ try {
                     <td><?php echo htmlspecialchars((string) ($proposal['updated_at'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($proposalChampion['score'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($proposalKpis['val_loss_total'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ($primaryArtifact['artifact_type'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ($primaryArtifact['availability_status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td>
+                        <?php if ((string) ($primaryArtifact['download_url'] ?? '') !== ''): ?>
+                            <a href="./index.php<?php echo htmlspecialchars((string) ($primaryArtifact['download_url'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>" target="_blank" rel="noreferrer">Descarregar</a>
+                        <?php endif; ?>
+                    </td>
                     <td><a href="<?php echo $proposalDetailPath; ?>" target="_blank" rel="noreferrer">Veure proposta</a></td>
                     <td>
                         <form method="post" action="./monitor.php">

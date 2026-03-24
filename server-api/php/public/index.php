@@ -87,6 +87,19 @@ function respond(int $status, array $payload): void
     exit;
 }
 
+function respondFileDownload(string $filePath, string $fileName, string $mimeType = 'application/octet-stream'): void
+{
+    if (!is_file($filePath)) {
+        respond(404, ['error' => 'artifact_not_found']);
+    }
+    http_response_code(200);
+    header('Content-Type: ' . $mimeType);
+    header('Content-Length: ' . (string) filesize($filePath));
+    header('Content-Disposition: attachment; filename="' . basename($fileName) . '"');
+    readfile($filePath);
+    exit;
+}
+
 function requireTokenIfConfigured(): void
 {
     $expectedToken = envValue('V2_API_TOKEN', '');
@@ -215,6 +228,20 @@ try {
                 (string) ($body['uri'] ?? ''),
                 (string) ($body['storage'] ?? 'drive'),
                 isset($body['checksum']) ? (string) $body['checksum'] : null,
+                is_array($body['metadata'] ?? null) ? $body['metadata'] : []
+            )
+        );
+    }
+
+    if ($method === 'POST' && count($parts) === 4 && $parts[0] === 'runs' && $parts[2] === 'artifacts' && $parts[3] === 'upload') {
+        $body = jsonInput();
+        respond(
+            201,
+            $service->uploadArtifact(
+                $parts[1],
+                (string) ($body['artifact_type'] ?? ''),
+                (string) ($body['file_name'] ?? 'artifact.bin'),
+                (string) ($body['content_base64'] ?? ''),
                 is_array($body['metadata'] ?? null) ? $body['metadata'] : []
             )
         );
@@ -371,6 +398,10 @@ try {
         respond(200, $service->getModelDetailView($parts[1]));
     }
 
+    if ($method === 'GET' && count($parts) === 3 && $parts[0] === 'models' && $parts[2] === 'artifacts') {
+        respond(200, $service->getModelArtifacts($parts[1]));
+    }
+
     if ($method === 'GET' && $parts === ['models', 'compare']) {
         $left = is_string($_GET['left'] ?? null) ? (string) $_GET['left'] : '';
         $right = is_string($_GET['right'] ?? null) ? (string) $_GET['right'] : '';
@@ -378,6 +409,11 @@ try {
             respond(400, ['error' => 'left_and_right_required']);
         }
         respond(200, $service->compareModels($left, $right));
+    }
+
+    if ($method === 'GET' && count($parts) === 3 && $parts[0] === 'artifacts' && $parts[2] === 'download') {
+        $download = $service->getArtifactDownloadInfo($parts[1]);
+        respondFileDownload((string) $download['path'], (string) $download['file_name'], (string) $download['mime_type']);
     }
 
     if ($method === 'GET' && count($parts) === 3 && $parts[0] === 'runs' && $parts[2] === 'events') {
