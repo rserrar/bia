@@ -208,6 +208,52 @@ function monitorApiRequest(string $path): array
     return $decoded;
 }
 
+function streamMonitorApiDownload(string $path): void
+{
+    $baseUrl = monitorApiBaseUrl();
+    $url = $baseUrl . $path;
+    $headers = [];
+    $expectedToken = envValue('V2_API_TOKEN', '');
+    if ($expectedToken !== '') {
+        $headers[] = 'Authorization: Bearer ' . $expectedToken;
+    }
+    $context = stream_context_create([
+        'http' => [
+            'method' => 'GET',
+            'header' => implode("\r\n", $headers),
+            'ignore_errors' => true,
+            'timeout' => 60,
+        ],
+    ]);
+    $raw = @file_get_contents($url, false, $context);
+    if ($raw === false) {
+        throw new RuntimeException('monitor api download failed: ' . $path);
+    }
+    $contentType = 'application/octet-stream';
+    $contentLength = null;
+    $contentDisposition = 'attachment';
+    foreach (($http_response_header ?? []) as $headerLine) {
+        if (!is_string($headerLine)) {
+            continue;
+        }
+        $lower = strtolower($headerLine);
+        if (str_starts_with($lower, 'content-type:')) {
+            $contentType = trim(substr($headerLine, strlen('Content-Type:')));
+        } elseif (str_starts_with($lower, 'content-length:')) {
+            $contentLength = trim(substr($headerLine, strlen('Content-Length:')));
+        } elseif (str_starts_with($lower, 'content-disposition:')) {
+            $contentDisposition = trim(substr($headerLine, strlen('Content-Disposition:')));
+        }
+    }
+    header('Content-Type: ' . $contentType);
+    if ($contentLength !== null && $contentLength !== '') {
+        header('Content-Length: ' . $contentLength);
+    }
+    header('Content-Disposition: ' . $contentDisposition);
+    echo $raw;
+    exit;
+}
+
 function toFloatOrNull($value): ?float
 {
     if (is_bool($value)) {
@@ -551,6 +597,10 @@ try {
         echo json_encode($timeline, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
         exit;
     }
+    $downloadArtifactId = is_string($_GET['download_artifact_id'] ?? null) ? (string) $_GET['download_artifact_id'] : '';
+    if ($downloadArtifactId !== '') {
+        streamMonitorApiDownload('/artifacts/' . rawurlencode($downloadArtifactId) . '/download');
+    }
     $compareLeft = is_string($_GET['compare_left'] ?? null) ? (string) $_GET['compare_left'] : '';
     $compareRight = is_string($_GET['compare_right'] ?? null) ? (string) $_GET['compare_right'] : '';
     $comparison = null;
@@ -731,8 +781,8 @@ try {
                     <td class="mono"><?php echo htmlspecialchars((string) ($model['trained_model_uri'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($artifact['availability_status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td>
-                        <?php if ((string) ($artifact['download_url'] ?? '') !== ''): ?>
-                            <a href="./index.php<?php echo htmlspecialchars((string) ($artifact['download_url'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>" target="_blank" rel="noreferrer">Descarregar</a>
+                        <?php if ((string) ($artifact['artifact_id'] ?? '') !== ''): ?>
+                            <a href="./monitor.php?download_artifact_id=<?php echo rawurlencode((string) ($artifact['artifact_id'] ?? '')); ?>" target="_blank" rel="noreferrer">Descarregar</a>
                         <?php endif; ?>
                     </td>
                     <td><?php echo htmlspecialchars((string) ($model['rationale'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
@@ -980,8 +1030,8 @@ try {
                     <td><?php echo htmlspecialchars((string) ($primaryArtifact['artifact_type'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($primaryArtifact['availability_status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td>
-                        <?php if ((string) ($primaryArtifact['download_url'] ?? '') !== ''): ?>
-                            <a href="./index.php<?php echo htmlspecialchars((string) ($primaryArtifact['download_url'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>" target="_blank" rel="noreferrer">Descarregar</a>
+                        <?php if ((string) ($primaryArtifact['artifact_id'] ?? '') !== ''): ?>
+                            <a href="./monitor.php?download_artifact_id=<?php echo rawurlencode((string) ($primaryArtifact['artifact_id'] ?? '')); ?>" target="_blank" rel="noreferrer">Descarregar</a>
                         <?php endif; ?>
                     </td>
                     <td><a href="<?php echo $proposalDetailPath; ?>" target="_blank" rel="noreferrer">Veure proposta</a></td>
