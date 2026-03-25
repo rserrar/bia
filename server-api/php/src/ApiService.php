@@ -1090,7 +1090,13 @@ final class ApiService
         $artifactUri = (string) ($artifact['uri'] ?? '');
         $availability = (string) ($metadata['availability_status'] ?? 'unknown');
         if ($storageBackend === 'server') {
-            $availability = is_file($artifactUri) ? 'available' : 'missing';
+            if ($artifactUri !== '' && is_file($artifactUri)) {
+                $availability = 'available';
+            } elseif ((string) ($metadata['download_url'] ?? '') !== '') {
+                $availability = $availability !== 'unknown' ? $availability : 'available';
+            } else {
+                $availability = 'missing';
+            }
         }
         return [
             'artifact_id' => (string) ($metadata['artifact_id'] ?? ''),
