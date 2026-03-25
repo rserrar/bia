@@ -103,6 +103,15 @@ Increment d'artifacts canònics:
 - `GET /artifacts/{artifact_id}/download`
   - descarrega l'artifact quan el backend canònic es `server`
 
+Increment de resumabilitat:
+
+- `GET /models/{proposal_id}/detail-view`
+  - inclou `resume_state`
+- `GET /models/{proposal_id}/artifacts`
+  - inclou artifacts `checkpoint`
+- `GET /runs/{run_id}/timeline`
+  - mostra `training_checkpoint_saved`, `training_interrupted`, `training_resumed`, `training_resume_failed`, `training_restarted_from_scratch`
+
 Nota de monitor:
 
 - `monitor.php` fa de proxy de descàrrega autenticat (`download_artifact_id`) per evitar exposar el token API al navegador.

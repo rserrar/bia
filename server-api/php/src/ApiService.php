@@ -263,6 +263,12 @@ final class ApiService
                 'prompt_audit' => is_array($llmMetadata['prompt_audit'] ?? null) ? $llmMetadata['prompt_audit'] : [],
                 'artifacts' => $artifacts,
                 'primary_artifact' => $primaryArtifact,
+                'resume' => [
+                    'resumable' => (bool) ($llmMetadata['resumable'] ?? false),
+                    'last_epoch_completed' => $llmMetadata['last_epoch_completed'] ?? null,
+                    'last_checkpoint_epoch' => $llmMetadata['last_checkpoint_epoch'] ?? null,
+                    'resume_attempts' => $llmMetadata['resume_attempts'] ?? null,
+                ],
                 'champion' => [
                     'active' => (bool) ($llmMetadata['champion_active'] ?? false),
                     'scope' => (string) ($llmMetadata['champion_scope'] ?? ''),
@@ -440,6 +446,18 @@ final class ApiService
                 'policy_profile' => (string) ($llmMetadata['champion_policy_profile'] ?? ''),
             ],
             'artifacts' => $this->getModelArtifacts($proposalId)['artifacts'],
+            'resume_state' => [
+                'resumable' => (bool) ($llmMetadata['resumable'] ?? false),
+                'last_epoch_completed' => $llmMetadata['last_epoch_completed'] ?? null,
+                'last_checkpoint_artifact_id' => $llmMetadata['last_checkpoint_artifact_id'] ?? null,
+                'last_checkpoint_epoch' => $llmMetadata['last_checkpoint_epoch'] ?? null,
+                'last_checkpoint_local_path' => $llmMetadata['last_checkpoint_local_path'] ?? null,
+                'resume_attempts' => $llmMetadata['resume_attempts'] ?? 0,
+                'resumed_from_checkpoint' => (bool) ($llmMetadata['resumed_from_checkpoint'] ?? false),
+                'resume_checkpoint_uri' => $llmMetadata['resume_checkpoint_uri'] ?? null,
+                'training_interrupted_at' => $llmMetadata['training_interrupted_at'] ?? null,
+                'resume_history' => is_array($llmMetadata['resume_history'] ?? null) ? $llmMetadata['resume_history'] : [],
+            ],
             'selection_view' => $decision,
             'proposal_payload' => is_array($proposal['proposal'] ?? null) ? $proposal['proposal'] : [],
         ];

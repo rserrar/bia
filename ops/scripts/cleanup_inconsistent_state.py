@@ -167,6 +167,7 @@ def _run_cleanup(api_base_url: str, token: str, apply_changes: bool) -> dict[str
                         "cleanup_reason": "stale_training_requeued",
                         "cleanup_at": _now_iso(),
                         "cleanup_previous_status": "training",
+                        "training_interrupted_at": _now_iso(),
                     },
                 },
             )
@@ -180,6 +181,17 @@ def _run_cleanup(api_base_url: str, token: str, apply_changes: bool) -> dict[str
                         "event_type": "cleanup_proposal_requeued",
                         "label": f"Proposta {item['proposal_id']} reencuada per stale training",
                         "details": {"age_minutes": item["age_minutes"], "cleanup_at": _now_iso()},
+                    },
+                )
+                _request_json(
+                    "POST",
+                    api_base_url,
+                    f"/runs/{item['run_id']}/events",
+                    token,
+                    {
+                        "event_type": "training_interrupted",
+                        "label": f"Entrenament interromput per stale training a {item['proposal_id']}",
+                        "details": {"proposal_id": item["proposal_id"], "age_minutes": item["age_minutes"], "cleanup_at": _now_iso()},
                     },
                 )
             applied.append({"action": "requeue_training_proposal", **item})

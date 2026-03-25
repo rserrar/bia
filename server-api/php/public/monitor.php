@@ -763,6 +763,8 @@ try {
                     <th>Score</th>
                     <th>Primary KPI</th>
                     <th>Status</th>
+                    <th>Resume</th>
+                    <th>Checkpoint epoch</th>
                     <th>Artifact</th>
                     <th>Availability</th>
                     <th>Download</th>
@@ -778,6 +780,8 @@ try {
                     <td><?php echo htmlspecialchars((string) ($model['score'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($model['primary_kpi'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($model['status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) (((($model['resume']['resumable'] ?? false)) ? 'yes' : 'no')), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ($model['resume']['last_checkpoint_epoch'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td class="mono"><?php echo htmlspecialchars((string) ($model['trained_model_uri'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($artifact['availability_status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td>
@@ -999,6 +1003,8 @@ try {
                 <th>Updated</th>
                 <th>Score</th>
                 <th>KPI</th>
+                <th>Resume</th>
+                <th>Checkpoint epoch</th>
                 <th>Artifact</th>
                 <th>Availability</th>
                 <th>Download</th>
@@ -1018,6 +1024,7 @@ try {
                     $proposalChampion = is_array($proposal['champion'] ?? null) ? $proposal['champion'] : [];
                     $proposalKpis = is_array($proposal['training_kpis'] ?? null) ? $proposal['training_kpis'] : [];
                     $primaryArtifact = is_array($proposal['primary_artifact'] ?? null) ? $proposal['primary_artifact'] : [];
+                    $resumeState = is_array($proposal['resume'] ?? null) ? $proposal['resume'] : [];
                 ?>
                 <tr>
                     <td><?php echo $proposalIdEscaped; ?></td>
@@ -1027,6 +1034,8 @@ try {
                     <td><?php echo htmlspecialchars((string) ($proposal['updated_at'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($proposalChampion['score'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($proposalKpis['val_loss_total'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ((($resumeState['resumable'] ?? false) ? 'yes' : 'no')), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ($resumeState['last_checkpoint_epoch'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($primaryArtifact['artifact_type'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($primaryArtifact['availability_status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td>

@@ -60,6 +60,12 @@ Variables utiles de HTTP hardening:
 - `V2_API_CIRCUIT_BREAKER_THRESHOLD`
 - `V2_API_CIRCUIT_BREAKER_COOLDOWN_SECONDS`
 
+Variables utiles de checkpoints / resume:
+
+- `V2_CHECKPOINT_EVERY_EPOCHS`
+- `V2_MAX_RESUME_ATTEMPTS`
+- `V2_MODEL_CHECKPOINTS_DIR`
+
 Variables utiles de cleanup:
 
 - `V2_CLEANUP_MODE=dry-run|apply`

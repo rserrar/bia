@@ -291,6 +291,9 @@ class ApiClient:
     def get_model_proposal(self, proposal_id: str) -> dict[str, Any]:
         return self._request("GET", f"/model-proposals/{proposal_id}")
 
+    def get_model_artifacts(self, proposal_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/models/{proposal_id}/artifacts")
+
     def lock_accepted_proposal_for_training(self, trainer_id: str) -> dict[str, Any] | None:
         try:
             return self._request("POST", "/model-proposals/lock-for-training", {"trainer_id": trainer_id})

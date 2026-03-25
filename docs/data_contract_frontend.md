@@ -76,6 +76,15 @@ Els camps rellevants per UI avui son:
 - `champion_score_breakdown`
 - `kpi_evaluation`
 - `kpi_result`
+- `last_epoch_completed`
+- `last_checkpoint_artifact_id`
+- `last_checkpoint_epoch`
+- `resumable`
+- `resume_attempts`
+- `resumed_from_checkpoint`
+- `resume_checkpoint_uri`
+- `training_interrupted_at`
+- `resume_history`
 
 ## Server persistence model
 
@@ -136,6 +145,14 @@ Upload intern actual:
 - `POST /runs/{run_id}/artifacts/upload`
 
 Aquest endpoint permet persistir una copia del model entrenat al servidor i evitar dependencia del path local de Colab.
+
+Checkpoints:
+
+- artifacts amb `artifact_type=checkpoint`
+- cada checkpoint pot portar:
+  - `epoch`
+  - `checkpoint_uri`
+  - `training_config_hash`
 
 Nota d'accés des d'UI:
 

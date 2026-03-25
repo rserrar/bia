@@ -131,6 +131,13 @@ Despres de provar:
 - mirar `monitor.php`, watcher i events
 - executar cleanup dry-run
 
+### Training interromput / resume
+
+- mirar timeline del run i detail-view de la proposal
+- comprovar `resume_state`
+- comprovar checkpoints a `GET /models/{proposal_id}/artifacts`
+- si hi ha `training_config_hash` mismatch, el sistema ha de reiniciar des de zero
+
 ### `trained_model_uri` buit o KPI absent
 
 - revisar desplegament backend real

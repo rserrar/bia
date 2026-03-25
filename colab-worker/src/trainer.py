@@ -1,6 +1,7 @@
 import time
 import os
 import json
+import hashlib
 import logging
 import traceback
 from pathlib import Path
@@ -126,6 +127,99 @@ class TrainerFeedbackAndLimitCallback(KerasCallback):  # type: ignore[misc]
             if model is not None:
                 model.stop_training = True
 
+
+class TrainingCheckpointCallback(KerasCallback):  # type: ignore[misc]
+    def __init__(
+        self,
+        proposal_id: str,
+        run_id: str,
+        checkpoint_path: Path,
+        api_client: ApiClient,
+        every_epochs: int,
+        training_config_hash: str,
+    ):
+        super().__init__()
+        self.proposal_id = proposal_id
+        self.run_id = run_id
+        self.checkpoint_path = checkpoint_path
+        self.api = api_client
+        self.every_epochs = max(1, every_epochs)
+        self.training_config_hash = training_config_hash
+
+    def on_train_begin(self, logs=None):
+        try:
+            self.api.update_proposal_status(
+                self.proposal_id,
+                "training",
+                {
+                    "last_training_event_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+                    "training_config_hash": self.training_config_hash,
+                },
+            )
+        except Exception:
+            return
+
+    def on_epoch_end(self, epoch, logs=None):
+        current_epoch = int(epoch + 1)
+        try:
+            self.api.update_proposal_status(
+                self.proposal_id,
+                "training",
+                {
+                    "last_epoch_completed": current_epoch,
+                    "last_training_event_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+                    "resumable": True,
+                    "training_config_hash": self.training_config_hash,
+                },
+            )
+        except Exception:
+            return
+        if current_epoch % self.every_epochs != 0:
+            return
+        model = getattr(self, "model", None)
+        if model is None:
+            return
+        try:
+            model.save_weights(str(self.checkpoint_path))
+            artifact = self.api.upload_artifact_file(
+                self.run_id,
+                artifact_type="checkpoint",
+                file_path=str(self.checkpoint_path),
+                metadata={
+                    "proposal_id": self.proposal_id,
+                    "epoch": current_epoch,
+                    "checkpoint_uri": str(self.checkpoint_path),
+                    "training_config_hash": self.training_config_hash,
+                },
+            )
+            artifact_metadata = artifact.get("metadata", {}) if isinstance(artifact, dict) and isinstance(artifact.get("metadata"), dict) else {}
+            self.api.update_proposal_status(
+                self.proposal_id,
+                "training",
+                {
+                    "last_epoch_completed": current_epoch,
+                    "last_checkpoint_artifact_id": artifact_metadata.get("artifact_id"),
+                    "last_checkpoint_epoch": current_epoch,
+                    "last_checkpoint_local_path": str(self.checkpoint_path),
+                    "resume_checkpoint_uri": artifact_metadata.get("artifact_id"),
+                    "last_checkpoint_saved_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+                    "resumable": True,
+                    "training_config_hash": self.training_config_hash,
+                },
+            )
+            self.api.add_event(
+                self.run_id,
+                "training_checkpoint_saved",
+                f"Checkpoint guardat per {self.proposal_id} a l'època {current_epoch}",
+                {
+                    "proposal_id": self.proposal_id,
+                    "epoch": current_epoch,
+                    "checkpoint_artifact_id": artifact_metadata.get("artifact_id"),
+                },
+            )
+        except Exception:
+            return
+
 class ModelTrainerEngine:
     def __init__(self, api_client: ApiClient, config: dict[str, Any]):
         self.api = api_client
@@ -143,6 +237,49 @@ class ModelTrainerEngine:
         self.champion_scope = os.getenv("V2_CHAMPION_SCOPE", "run").strip().lower()
         if self.champion_scope not in {"run", "global"}:
             self.champion_scope = "run"
+        self.checkpoint_every_epochs = max(1, int(os.getenv("V2_CHECKPOINT_EVERY_EPOCHS", "1")))
+        self.max_resume_attempts = max(1, int(os.getenv("V2_MAX_RESUME_ATTEMPTS", "2")))
+
+    def _training_config_hash(self, model_def: dict[str, Any]) -> str:
+        training_cfg = model_def.get("training_config", {}) if isinstance(model_def.get("training_config", {}), dict) else {}
+        payload = json.dumps(training_cfg, ensure_ascii=False, sort_keys=True)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _checkpoint_dir_for_proposal(self, proposal_id: str) -> Path:
+        checkpoint_dir = Path(
+            os.getenv(
+                "V2_MODEL_CHECKPOINTS_DIR",
+                str(self.repo_root / "colab-worker" / "checkpoints" / "model_checkpoints" / proposal_id),
+            )
+        )
+        if not checkpoint_dir.is_absolute():
+            checkpoint_dir = (self.repo_root / checkpoint_dir).resolve()
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        return checkpoint_dir
+
+    def _resolve_resume_state(self, proposal: dict[str, Any], model_def: dict[str, Any]) -> dict[str, Any]:
+        llm_metadata_raw = proposal.get("llm_metadata")
+        llm_metadata: dict[str, Any] = llm_metadata_raw if isinstance(llm_metadata_raw, dict) else {}
+        training_hash = self._training_config_hash(model_def)
+        checkpoint_artifact_id = str(llm_metadata.get("last_checkpoint_artifact_id", "")).strip()
+        checkpoint_epoch = int(llm_metadata.get("last_checkpoint_epoch", 0) or 0)
+        checkpoint_path = str(llm_metadata.get("last_checkpoint_local_path", "")).strip()
+        resumable = bool(llm_metadata.get("resumable", False))
+        resume_attempts = int(llm_metadata.get("resume_attempts", 0) or 0)
+        stored_hash = str(llm_metadata.get("training_config_hash", "")).strip()
+        config_match = stored_hash == "" or stored_hash == training_hash
+        checkpoint_exists = checkpoint_path != "" and Path(checkpoint_path).is_file()
+        can_resume = resumable and checkpoint_artifact_id != "" and checkpoint_epoch > 0 and checkpoint_exists and config_match and resume_attempts < self.max_resume_attempts
+        return {
+            "training_config_hash": training_hash,
+            "checkpoint_artifact_id": checkpoint_artifact_id,
+            "checkpoint_epoch": checkpoint_epoch,
+            "checkpoint_local_path": checkpoint_path,
+            "resume_attempts": resume_attempts,
+            "config_match": config_match,
+            "checkpoint_exists": checkpoint_exists,
+            "can_resume": can_resume,
+        }
 
     def run_loop(self):
         print(f"🟢 [Trainer Worker: {self.trainer_id}] Mantenint cerca de models acceptats...")
@@ -214,8 +351,9 @@ class ModelTrainerEngine:
             model_def = proposal.get("proposal", {}).get("model_definition", {})
             if not model_def:
                 raise RuntimeError("El payload no conté `model_definition`.")
-                
+
             model_def["model_id"] = proposal_id
+            resume_state = self._resolve_resume_state(proposal, model_def)
 
             # 2. Reutilitzar utilitats de dades/model (shared first, legacy fallback)
             try:
@@ -260,6 +398,8 @@ class ModelTrainerEngine:
 
             print("🏗️ Construint el graf Keras del model...")
             keras_model = build_model_from_json_definition(model_def)
+            checkpoint_dir = self._checkpoint_dir_for_proposal(proposal_id)
+            checkpoint_path = checkpoint_dir / f"{proposal_id}.weights.h5"
             
             # Parametrització temporal o definitiva?
             epochs = model_def.get("training_config", {}).get("fit", {}).get("epochs", 15)
@@ -272,8 +412,94 @@ class ModelTrainerEngine:
                     self.max_seconds_per_model,
                     api_client=self.api,
                     run_id=run_id,
-                )
+                ),
+                TrainingCheckpointCallback(
+                    proposal_id=proposal_id,
+                    run_id=run_id,
+                    checkpoint_path=checkpoint_path,
+                    api_client=self.api,
+                    every_epochs=self.checkpoint_every_epochs,
+                    training_config_hash=resume_state["training_config_hash"],
+                ),
             ]
+
+            initial_epoch = 0
+            resumed_from_checkpoint = False
+            resume_checkpoint_uri = ""
+            if resume_state["can_resume"]:
+                try:
+                    keras_model.load_weights(str(resume_state["checkpoint_local_path"]))
+                    initial_epoch = int(resume_state["checkpoint_epoch"])
+                    resumed_from_checkpoint = True
+                    resume_checkpoint_uri = str(resume_state["checkpoint_artifact_id"])
+                    self.api.update_proposal_status(
+                        proposal_id,
+                        "training",
+                        {
+                            "resume_attempts": int(resume_state["resume_attempts"]) + 1,
+                            "resumed_from_checkpoint": True,
+                            "resume_checkpoint_uri": resume_checkpoint_uri,
+                            "training_config_hash": resume_state["training_config_hash"],
+                        },
+                    )
+                    self.api.add_event(
+                        run_id,
+                        "training_resumed",
+                        f"Entrenament reprès per {proposal_id}",
+                        {
+                            "proposal_id": proposal_id,
+                            "checkpoint_artifact_id": resume_checkpoint_uri,
+                            "last_epoch_completed": int(resume_state["checkpoint_epoch"]),
+                            "initial_epoch": initial_epoch,
+                        },
+                    )
+                except Exception as resume_error:
+                    self.api.add_event(
+                        run_id,
+                        "training_resume_failed",
+                        f"No s'ha pogut reprendre {proposal_id}",
+                        {"proposal_id": proposal_id, "error": str(resume_error)},
+                    )
+                    resumed_from_checkpoint = False
+                    initial_epoch = 0
+            elif str(proposal.get("status", "")) == "accepted":
+                llm_metadata_raw = proposal.get("llm_metadata")
+                llm_metadata: dict[str, Any] = llm_metadata_raw if isinstance(llm_metadata_raw, dict) else {}
+                if bool(llm_metadata.get("resumable", False)) and not bool(resume_state["config_match"]):
+                    self.api.add_event(
+                        run_id,
+                        "training_resume_blocked_config_mismatch",
+                        f"Resume bloquejat per config mismatch a {proposal_id}",
+                        {
+                            "proposal_id": proposal_id,
+                            "stored_training_config_hash": llm_metadata.get("training_config_hash"),
+                            "current_training_config_hash": resume_state["training_config_hash"],
+                        },
+                    )
+                if bool(llm_metadata.get("resumable", False)):
+                    self.api.add_event(
+                        run_id,
+                        "training_restarted_from_scratch",
+                        f"Entrenament reiniciat des de zero per {proposal_id}",
+                        {
+                            "proposal_id": proposal_id,
+                            "reason": "checkpoint_unavailable_or_incompatible",
+                        },
+                    )
+
+            self.api.update_proposal_status(
+                proposal_id,
+                "training",
+                {
+                    "training_started_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+                    "training_interrupted_at": None,
+                    "last_training_event_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+                    "resumed_from_checkpoint": resumed_from_checkpoint,
+                    "resume_checkpoint_uri": resume_checkpoint_uri,
+                    "training_config_hash": resume_state["training_config_hash"],
+                    "resume_attempts": int(resume_state["resume_attempts"]) + (1 if resumed_from_checkpoint else 0),
+                },
+            )
             
             print(f"🔥 Donant inici al mètode keras_model.fit() per un màxim de {epochs} èpoques.")
             start_t = time.time()
@@ -281,11 +507,34 @@ class ModelTrainerEngine:
                 X_train, Y_train,
                 validation_data=(X_val, Y_val) if X_val else None,
                 epochs=epochs,
+                initial_epoch=initial_epoch,
                 batch_size=batch_sz,
                 verbose=0,  # Apaguem el verbose per defecte i treballem amb el de la consola 
                 callbacks=cast(Any, callbacks)
             )
             elapsed = time.time() - start_t
+
+            total_epochs_trained = len(history.history['loss']) if 'loss' in history.history else 0
+            completed_epoch = initial_epoch + total_epochs_trained
+            keras_model.save_weights(str(checkpoint_path))
+            checkpoint_artifact = None
+            checkpoint_recorded_epoch = completed_epoch
+            if checkpoint_recorded_epoch > 0:
+                try:
+                    checkpoint_artifact = self.api.upload_artifact_file(
+                        run_id,
+                        artifact_type="checkpoint",
+                        file_path=str(checkpoint_path),
+                        metadata={
+                            "proposal_id": proposal_id,
+                            "epoch": checkpoint_recorded_epoch,
+                            "checkpoint_uri": str(checkpoint_path),
+                            "training_config_hash": resume_state["training_config_hash"],
+                        },
+                    )
+                except Exception as checkpoint_error:
+                    print(f"⚠️ API: no s'ha pogut pujar checkpoint final ({checkpoint_error})")
+            checkpoint_metadata = checkpoint_artifact.get("metadata", {}) if isinstance(checkpoint_artifact, dict) and isinstance(checkpoint_artifact.get("metadata"), dict) else {}
             
             metrics = {}
             if 'loss' in history.history:
@@ -342,11 +591,23 @@ class ModelTrainerEngine:
             self.api.update_proposal_status(proposal_id, "trained", {
                 "training_kpis": metrics,
                 "training_time": elapsed,
-                "total_epochs_trained": len(history.history['loss']),
+                "total_epochs_trained": total_epochs_trained,
                 "trained_model_uri": str(trained_model_path),
                 "trained_model_server_artifact_id": artifact_metadata.get("artifact_id"),
                 "trained_model_download_url": artifact_metadata.get("download_url"),
                 "trained_model_availability": artifact_metadata.get("availability_status"),
+                "last_epoch_completed": checkpoint_recorded_epoch,
+                "resumable": checkpoint_recorded_epoch < int(epochs),
+                "last_checkpoint_artifact_id": checkpoint_metadata.get("artifact_id"),
+                "last_checkpoint_epoch": checkpoint_recorded_epoch,
+                "last_checkpoint_local_path": str(checkpoint_path),
+                "resume_checkpoint_uri": checkpoint_metadata.get("artifact_id"),
+                "resume_history": [{
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+                    "resumed": resumed_from_checkpoint,
+                    "initial_epoch": initial_epoch,
+                    "completed_epoch": checkpoint_recorded_epoch,
+                }],
             })
             print("✅ API: status trained actualitzat")
 
@@ -361,8 +622,12 @@ class ModelTrainerEngine:
             print(f"⚠️ Fallada catastròfica entrenant {proposal_id}: {err_msg}")
             traceback.print_exc()
             try:
+                interruption_metadata_raw = proposal.get("llm_metadata")
+                interruption_metadata: dict[str, Any] = interruption_metadata_raw if isinstance(interruption_metadata_raw, dict) else {}
                 self.api.update_proposal_status(proposal_id, "rejected", {
-                    "training_error": err_msg
+                    "training_error": err_msg,
+                    "training_interrupted_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+                    "resumable": bool(interruption_metadata.get("last_checkpoint_artifact_id")),
                 })
             except Exception as status_error:
                 print(f"⚠️ API: no s'ha pogut marcar rejected ({status_error})")
