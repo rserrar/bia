@@ -137,6 +137,11 @@ Upload intern actual:
 
 Aquest endpoint permet persistir una copia del model entrenat al servidor i evitar dependencia del path local de Colab.
 
+Nota d'accés des d'UI:
+
+- el monitor web no ha d'enllaçar directament a `GET /artifacts/{artifact_id}/download` si l'API requereix token.
+- el patró actual és usar `monitor.php?download_artifact_id=...` com a proxy autenticat.
+
 ## What is not canonical for UI
 
 - `logs/llm_interactions/` a Colab

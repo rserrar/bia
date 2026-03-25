@@ -136,6 +136,12 @@ Despres de provar:
 - revisar desplegament backend real
 - validar persistencia de `metadata_updates`
 
+### Download d'artifact diu `unauthorized`
+
+- descarregar sempre des de `monitor.php`
+- el monitor proxifica la peticio cap a l'API amb el token del servidor
+- si falla, revisar que el servidor tingui l'ultim codi i PHP reiniciat
+
 ### `OpenAI response content is empty` o JSON truncat
 
 - revisar `logs/llm_interactions/`
@@ -175,3 +181,9 @@ Endpoints UI canònics:
 - `GET /champion/run/{id}`
 - `GET /champion/global`
 - `GET /models/shortlist`
+
+Artifacts canònics:
+
+- els models entrenats s'intenten pujar al servidor via `POST /runs/{run_id}/artifacts/upload`
+- el frontend/monitor ha de consumir `GET /models/{proposal_id}/artifacts`
+- la descàrrega d'usuari des del monitor passa per `download_artifact_id`

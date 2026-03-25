@@ -94,6 +94,19 @@ Increment 3 de productització:
 - `GET /models/compare`
   - comparacio A/B de dos models ja resolta al backend
 
+Increment d'artifacts canònics:
+
+- `POST /runs/{run_id}/artifacts/upload`
+  - permet pujar el fitxer real del model al servidor
+- `GET /models/{proposal_id}/artifacts`
+  - retorna metadata frontend-ready dels artifacts del model
+- `GET /artifacts/{artifact_id}/download`
+  - descarrega l'artifact quan el backend canònic es `server`
+
+Nota de monitor:
+
+- `monitor.php` fa de proxy de descàrrega autenticat (`download_artifact_id`) per evitar exposar el token API al navegador.
+
 Persistència actual al servidor (font per frontend):
 
 - `runs`
