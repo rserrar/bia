@@ -583,6 +583,23 @@ try {
         }
         redirectToMonitorHome();
     }
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && (string) ($_POST['action'] ?? '') === 'execution_request_create') {
+        $requestType = is_string($_POST['request_type'] ?? null) ? (string) $_POST['request_type'] : 'smoke_run';
+        $config = [
+            'profile' => is_string($_POST['profile'] ?? null) ? (string) $_POST['profile'] : 'small_test',
+            'generations' => is_numeric($_POST['generations'] ?? null) ? (int) $_POST['generations'] : 1,
+            'champion_scope' => is_string($_POST['champion_scope'] ?? null) ? (string) $_POST['champion_scope'] : 'run',
+        ];
+        $service->createExecutionRequest($requestType, $config);
+        redirectToMonitorHome();
+    }
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && (string) ($_POST['action'] ?? '') === 'execution_request_cancel') {
+        $requestId = is_string($_POST['request_id'] ?? null) ? (string) $_POST['request_id'] : '';
+        if ($requestId !== '') {
+            $service->cancelExecutionRequest($requestId);
+        }
+        redirectToMonitorHome();
+    }
     $summaryRunId = is_string($_GET['summary_run_id'] ?? null) ? (string) $_GET['summary_run_id'] : '';
     if ($summaryRunId !== '') {
         $summary = monitorApiRequest('/runs/' . rawurlencode($summaryRunId) . '/summary');
@@ -615,6 +632,7 @@ try {
         exit;
     }
     $runsPayload = monitorApiRequest('/runs?limit=100');
+    $executionRequestsPayload = monitorApiRequest('/execution-requests?limit=100');
     $proposalsPayload = monitorApiRequest('/proposals?limit=100');
     $recentEventsPayload = monitorApiRequest('/events?limit=15');
     $recentMetricsPayload = monitorApiRequest('/metrics?limit=50');
@@ -622,6 +640,7 @@ try {
     $shortlistPayload = monitorApiRequest('/models/shortlist?limit=5');
 
     $runs = is_array($runsPayload['runs'] ?? null) ? $runsPayload['runs'] : [];
+    $executionRequests = is_array($executionRequestsPayload['execution_requests'] ?? null) ? $executionRequestsPayload['execution_requests'] : [];
     $proposals = is_array($proposalsPayload['proposals'] ?? null) ? $proposalsPayload['proposals'] : [];
     $recentEvents = is_array($recentEventsPayload['events'] ?? null) ? $recentEventsPayload['events'] : [];
     $recentMetrics = is_array($recentMetricsPayload['metrics'] ?? null) ? $recentMetricsPayload['metrics'] : [];
@@ -710,6 +729,69 @@ try {
         <?php if ($evalResult !== null): ?>
             <span class="notice">Models avaluats (KPIs): <?php echo (int) ($evalResult['evaluated_count'] ?? 0); ?></span>
         <?php endif; ?>
+    </div>
+
+    <h2>Control Panel</h2>
+    <div class="panel">
+        <form method="post" action="./monitor.php" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px;">
+            <input type="hidden" name="action" value="execution_request_create">
+            <select name="request_type">
+                <option value="smoke_run">smoke_run</option>
+                <option value="micro_training">micro_training</option>
+                <option value="integration_matrix">integration_matrix</option>
+                <option value="resume_training">resume_training</option>
+                <option value="cleanup">cleanup</option>
+            </select>
+            <select name="profile">
+                <option value="small_test">small_test</option>
+                <option value="default">default</option>
+                <option value="real_large">real_large</option>
+            </select>
+            <input type="number" name="generations" value="1" min="1" style="width:70px;">
+            <select name="champion_scope">
+                <option value="run">run</option>
+                <option value="global">global</option>
+            </select>
+            <button type="submit">Crear execució</button>
+        </form>
+        <table>
+            <thead>
+                <tr>
+                    <th>Request</th>
+                    <th>Type</th>
+                    <th>Status</th>
+                    <th>Worker</th>
+                    <th>Heartbeat</th>
+                    <th>Attempts</th>
+                    <th>Result</th>
+                    <th>Acció</th>
+                </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($executionRequests as $request): ?>
+                <?php if (!is_array($request)) { continue; } ?>
+                <?php $reqId = (string) ($request['request_id'] ?? ''); ?>
+                <tr>
+                    <td class="mono"><?php echo htmlspecialchars($reqId, ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ($request['type'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ($request['status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ($request['claimed_by_worker'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ($request['heartbeat_at'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ($request['attempts'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><details><summary>Veure</summary><pre style="font-size:11px; margin:0; background:#1e293b; padding:4px; overflow-x:auto;"><?php echo htmlspecialchars(json_encode($request['result_summary'] ?? [], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), ENT_QUOTES, 'UTF-8'); ?></pre></details></td>
+                    <td>
+                        <?php if (in_array((string) ($request['status'] ?? ''), ['pending', 'claimed', 'running'], true)): ?>
+                            <form method="post" action="./monitor.php">
+                                <input type="hidden" name="action" value="execution_request_cancel">
+                                <input type="hidden" name="request_id" value="<?php echo htmlspecialchars($reqId, ENT_QUOTES, 'UTF-8'); ?>">
+                                <button type="submit">Cancel·lar</button>
+                            </form>
+                        <?php endif; ?>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
     </div>
 
     <h2>Run Summary</h2>

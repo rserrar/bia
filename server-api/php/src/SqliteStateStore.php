@@ -117,12 +117,38 @@ final class SqliteStateStore
             }
         }
 
+        $executionRequests = [];
+        $requestRows = $this->pdo->query(
+            'SELECT request_id, type, status, config_json, created_at, updated_at, claimed_by_worker, claimed_at, heartbeat_at, attempts, result_summary_json, result_artifacts_json, error_summary
+             FROM execution_requests ORDER BY id DESC'
+        );
+        if ($requestRows !== false) {
+            foreach ($requestRows as $row) {
+                $executionRequests[] = [
+                    'request_id' => (string) $row['request_id'],
+                    'type' => (string) $row['type'],
+                    'status' => (string) $row['status'],
+                    'config' => $this->decodeArray((string) $row['config_json']),
+                    'created_at' => (string) $row['created_at'],
+                    'updated_at' => (string) $row['updated_at'],
+                    'claimed_by_worker' => $row['claimed_by_worker'] === null ? null : (string) $row['claimed_by_worker'],
+                    'claimed_at' => $row['claimed_at'] === null ? null : (string) $row['claimed_at'],
+                    'heartbeat_at' => $row['heartbeat_at'] === null ? null : (string) $row['heartbeat_at'],
+                    'attempts' => (int) $row['attempts'],
+                    'result_summary' => $this->decodeArray((string) $row['result_summary_json']),
+                    'result_artifacts' => $this->decodeArray((string) $row['result_artifacts_json']),
+                    'error_summary' => $row['error_summary'] === null ? null : (string) $row['error_summary'],
+                ];
+            }
+        }
+
         return [
             'runs' => $runs,
             'events' => $events,
             'metrics' => $metrics,
             'artifacts' => $artifacts,
             'model_proposals' => $modelProposals,
+            'execution_requests' => $executionRequests,
         ];
     }
 
@@ -246,6 +272,64 @@ final class SqliteStateStore
         ]);
     }
 
+    public function appendExecutionRequest(array $request): void
+    {
+        $stmt = $this->pdo->prepare(
+            'INSERT INTO execution_requests (request_id, type, status, config_json, created_at, updated_at, claimed_by_worker, claimed_at, heartbeat_at, attempts, result_summary_json, result_artifacts_json, error_summary)
+             VALUES (:request_id, :type, :status, :config_json, :created_at, :updated_at, :claimed_by_worker, :claimed_at, :heartbeat_at, :attempts, :result_summary_json, :result_artifacts_json, :error_summary)'
+        );
+        $stmt->execute([
+            ':request_id' => (string) ($request['request_id'] ?? ''),
+            ':type' => (string) ($request['type'] ?? ''),
+            ':status' => (string) ($request['status'] ?? 'pending'),
+            ':config_json' => (string) json_encode($request['config'] ?? [], JSON_UNESCAPED_UNICODE),
+            ':created_at' => (string) ($request['created_at'] ?? ''),
+            ':updated_at' => (string) ($request['updated_at'] ?? ''),
+            ':claimed_by_worker' => isset($request['claimed_by_worker']) && $request['claimed_by_worker'] !== '' ? (string) $request['claimed_by_worker'] : null,
+            ':claimed_at' => isset($request['claimed_at']) && $request['claimed_at'] !== '' ? (string) $request['claimed_at'] : null,
+            ':heartbeat_at' => isset($request['heartbeat_at']) && $request['heartbeat_at'] !== '' ? (string) $request['heartbeat_at'] : null,
+            ':attempts' => (int) ($request['attempts'] ?? 0),
+            ':result_summary_json' => (string) json_encode($request['result_summary'] ?? [], JSON_UNESCAPED_UNICODE),
+            ':result_artifacts_json' => (string) json_encode($request['result_artifacts'] ?? [], JSON_UNESCAPED_UNICODE),
+            ':error_summary' => isset($request['error_summary']) && $request['error_summary'] !== '' ? (string) $request['error_summary'] : null,
+        ]);
+    }
+
+    public function replaceExecutionRequest(string $requestId, array $request): void
+    {
+        $stmt = $this->pdo->prepare(
+            'UPDATE execution_requests
+             SET type = :type,
+                 status = :status,
+                 config_json = :config_json,
+                 created_at = :created_at,
+                 updated_at = :updated_at,
+                 claimed_by_worker = :claimed_by_worker,
+                 claimed_at = :claimed_at,
+                 heartbeat_at = :heartbeat_at,
+                 attempts = :attempts,
+                 result_summary_json = :result_summary_json,
+                 result_artifacts_json = :result_artifacts_json,
+                 error_summary = :error_summary
+             WHERE request_id = :request_id'
+        );
+        $stmt->execute([
+            ':request_id' => $requestId,
+            ':type' => (string) ($request['type'] ?? ''),
+            ':status' => (string) ($request['status'] ?? 'pending'),
+            ':config_json' => (string) json_encode($request['config'] ?? [], JSON_UNESCAPED_UNICODE),
+            ':created_at' => (string) ($request['created_at'] ?? ''),
+            ':updated_at' => (string) ($request['updated_at'] ?? ''),
+            ':claimed_by_worker' => isset($request['claimed_by_worker']) && $request['claimed_by_worker'] !== '' ? (string) $request['claimed_by_worker'] : null,
+            ':claimed_at' => isset($request['claimed_at']) && $request['claimed_at'] !== '' ? (string) $request['claimed_at'] : null,
+            ':heartbeat_at' => isset($request['heartbeat_at']) && $request['heartbeat_at'] !== '' ? (string) $request['heartbeat_at'] : null,
+            ':attempts' => (int) ($request['attempts'] ?? 0),
+            ':result_summary_json' => (string) json_encode($request['result_summary'] ?? [], JSON_UNESCAPED_UNICODE),
+            ':result_artifacts_json' => (string) json_encode($request['result_artifacts'] ?? [], JSON_UNESCAPED_UNICODE),
+            ':error_summary' => isset($request['error_summary']) && $request['error_summary'] !== '' ? (string) $request['error_summary'] : null,
+        ]);
+    }
+
     public function resetAll(): void
     {
         $this->pdo->beginTransaction();
@@ -322,6 +406,24 @@ final class SqliteStateStore
                 llm_metadata_json TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            )'
+        );
+        $this->pdo->exec(
+            'CREATE TABLE IF NOT EXISTS execution_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id TEXT NOT NULL UNIQUE,
+                type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                config_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                claimed_by_worker TEXT NULL,
+                claimed_at TEXT NULL,
+                heartbeat_at TEXT NULL,
+                attempts INTEGER NOT NULL,
+                result_summary_json TEXT NOT NULL,
+                result_artifacts_json TEXT NOT NULL,
+                error_summary TEXT NULL
             )'
         );
     }

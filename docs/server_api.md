@@ -33,6 +33,16 @@ Els clients del repo ja fan autodeteccio de prefix quan reben `404`.
 - `GET /models/compare?left=...&right=...`
 - `GET /models/{proposal_id}/artifacts`
 - `GET /artifacts/{artifact_id}/download`
+- `POST /execution-requests`
+- `GET /execution-requests`
+- `GET /execution-requests/pending`
+- `GET /execution-requests/{request_id}`
+- `POST /execution-requests/{request_id}/claim`
+- `POST /execution-requests/{request_id}/heartbeat`
+- `POST /execution-requests/{request_id}/start`
+- `POST /execution-requests/{request_id}/complete`
+- `POST /execution-requests/{request_id}/fail`
+- `POST /execution-requests/{request_id}/cancel`
 - `POST /model-proposals/{proposal_id}/status`
 - `POST /model-proposals/{proposal_id}/enqueue-phase0`
 - `POST /model-proposals/lock-for-training`
@@ -130,3 +140,9 @@ Persistència actual al servidor (font per frontend):
 - `model_proposals`
 
 Els frontends han de consumir aquesta capa, no dependre de logs locals de Colab.
+
+Control plane v1:
+
+- `execution_request` es la nova entitat de control d'execucio
+- el servidor actua com a control plane
+- Colab actua com a executor via `run_worker_loop.py`

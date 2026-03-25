@@ -247,6 +247,49 @@ try {
         );
     }
 
+    if ($method === 'POST' && $parts === ['execution-requests']) {
+        $body = jsonInput();
+        respond(201, $service->createExecutionRequest((string) ($body['type'] ?? ''), is_array($body['config'] ?? null) ? $body['config'] : []));
+    }
+
+    if ($method === 'POST' && count($parts) === 3 && $parts[0] === 'execution-requests' && $parts[2] === 'claim') {
+        $body = jsonInput();
+        $staleAfterSeconds = (int) ($body['stale_after_seconds'] ?? 120);
+        respond(200, $service->claimExecutionRequest($parts[1], (string) ($body['worker_id'] ?? 'unknown_worker'), $staleAfterSeconds));
+    }
+
+    if ($method === 'POST' && count($parts) === 3 && $parts[0] === 'execution-requests' && $parts[2] === 'heartbeat') {
+        $body = jsonInput();
+        respond(200, $service->heartbeatExecutionRequest($parts[1], (string) ($body['worker_id'] ?? 'unknown_worker')));
+    }
+
+    if ($method === 'POST' && count($parts) === 3 && $parts[0] === 'execution-requests' && $parts[2] === 'start') {
+        $body = jsonInput();
+        respond(200, $service->startExecutionRequest($parts[1], (string) ($body['worker_id'] ?? 'unknown_worker')));
+    }
+
+    if ($method === 'POST' && count($parts) === 3 && $parts[0] === 'execution-requests' && $parts[2] === 'complete') {
+        $body = jsonInput();
+        respond(200, $service->completeExecutionRequest(
+            $parts[1],
+            is_array($body['result_summary'] ?? null) ? $body['result_summary'] : [],
+            is_array($body['result_artifacts'] ?? null) ? $body['result_artifacts'] : []
+        ));
+    }
+
+    if ($method === 'POST' && count($parts) === 3 && $parts[0] === 'execution-requests' && $parts[2] === 'fail') {
+        $body = jsonInput();
+        respond(200, $service->failExecutionRequest(
+            $parts[1],
+            (string) ($body['error_summary'] ?? 'execution_failed'),
+            is_array($body['result_summary'] ?? null) ? $body['result_summary'] : []
+        ));
+    }
+
+    if ($method === 'POST' && count($parts) === 3 && $parts[0] === 'execution-requests' && $parts[2] === 'cancel') {
+        respond(200, $service->cancelExecutionRequest($parts[1]));
+    }
+
     if ($method === 'POST' && $parts === ['maintenance', 'watchdog']) {
         $body = jsonInput();
         $staleAfterSeconds = (int) ($body['stale_after_seconds'] ?? 120);
@@ -330,6 +373,24 @@ try {
             $limit = 50;
         }
         respond(200, ['events' => $service->listEvents($limit)]);
+    }
+
+    if ($method === 'GET' && $parts === ['execution-requests']) {
+        $limitParam = $_GET['limit'] ?? '100';
+        $limit = is_numeric($limitParam) ? (int) $limitParam : 100;
+        $status = is_string($_GET['status'] ?? null) ? (string) $_GET['status'] : null;
+        respond(200, ['execution_requests' => $service->listExecutionRequests($limit, $status)]);
+    }
+
+    if ($method === 'GET' && $parts === ['execution-requests', 'pending']) {
+        $limitParam = $_GET['limit'] ?? '100';
+        $limit = is_numeric($limitParam) ? (int) $limitParam : 100;
+        $staleAfterSeconds = is_numeric($_GET['stale_after_seconds'] ?? null) ? (int) $_GET['stale_after_seconds'] : 120;
+        respond(200, ['execution_requests' => $service->listPendingExecutionRequests($limit, $staleAfterSeconds)]);
+    }
+
+    if ($method === 'GET' && count($parts) === 2 && $parts[0] === 'execution-requests') {
+        respond(200, $service->getExecutionRequest($parts[1]));
     }
 
     if ($method === 'GET' && $parts === ['metrics']) {

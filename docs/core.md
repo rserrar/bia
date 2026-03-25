@@ -31,6 +31,7 @@ L'objectiu practic actual es executar cicles curts, repetibles i auditables on e
 - `legacy_inventory.md`: inventari de peces legacy encara vives.
 - `runbook_operations.md`: cami canonic d'operacio per un tecnic.
 - `data_contract_frontend.md`: quines dades s'envien, es persisteixen i es serveixen a frontend.
+- `execution_control_plane.md`: model de control plane server-driven i worker loop.
 - `server_api.md`: contractes i comportament real d'endpoints.
 - `operations.md`: arrencada, parada i scripts operatius.
 - `observability.md`: visibilitat runtime i interpretacio rapida.
@@ -84,6 +85,10 @@ Per operacio diària i checklist final:
 Per contracte de dades frontend-ready:
 
 <data_contract_frontend>
+
+Per control plane i execucions server-driven:
+
+<execution_control_plane>
 
 Per entendre el contracte real de l'API i metadades de proposals:
 

@@ -16,3 +16,4 @@ Punt d'entrada unificat de documentacio V2.
 - Legacy inventory: `legacy_inventory.md`
 - Runbook: `runbook_operations.md`
 - Frontend data contract: `data_contract_frontend.md`
+- Execution control plane: `execution_control_plane.md`

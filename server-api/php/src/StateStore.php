@@ -103,6 +103,29 @@ final class StateStore
         });
     }
 
+    public function appendExecutionRequest(array $request): void
+    {
+        $this->mutate(static function (array &$state) use ($request): void {
+            $state['execution_requests'][] = $request;
+        });
+    }
+
+    public function replaceExecutionRequest(string $requestId, array $request): void
+    {
+        $this->mutate(static function (array &$state) use ($requestId, $request): void {
+            $requests = is_array($state['execution_requests'] ?? null) ? $state['execution_requests'] : [];
+            foreach ($requests as $index => $candidate) {
+                if ((string) ($candidate['request_id'] ?? '') === $requestId) {
+                    $requests[$index] = $request;
+                    $state['execution_requests'] = $requests;
+                    return;
+                }
+            }
+            $requests[] = $request;
+            $state['execution_requests'] = $requests;
+        });
+    }
+
     public function resetAll(): void
     {
         $this->write($this->emptyState());
@@ -140,6 +163,7 @@ final class StateStore
             'metrics' => [],
             'artifacts' => [],
             'model_proposals' => [],
+            'execution_requests' => [],
         ];
     }
 }

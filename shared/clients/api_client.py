@@ -312,3 +312,40 @@ class ApiClient:
             {"status": status, "metadata_updates": metadata_updates or {}},
         )
 
+    def create_execution_request(self, request_type: str, config: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._request("POST", "/execution-requests", {"type": request_type, "config": config or {}})
+
+    def list_execution_requests(self, limit: int = 100, status: str | None = None) -> list[dict[str, Any]]:
+        query = f"/execution-requests?limit={max(1, int(limit))}"
+        if status:
+            query += f"&status={status}"
+        payload = self._request("GET", query)
+        requests = payload.get("execution_requests", []) if isinstance(payload, dict) else []
+        return [item for item in requests if isinstance(item, dict)]
+
+    def list_pending_execution_requests(self, limit: int = 100, stale_after_seconds: int = 120) -> list[dict[str, Any]]:
+        payload = self._request("GET", f"/execution-requests/pending?limit={max(1, int(limit))}&stale_after_seconds={max(1, int(stale_after_seconds))}")
+        requests = payload.get("execution_requests", []) if isinstance(payload, dict) else []
+        return [item for item in requests if isinstance(item, dict)]
+
+    def get_execution_request(self, request_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/execution-requests/{request_id}")
+
+    def claim_execution_request(self, request_id: str, worker_id: str, stale_after_seconds: int = 120) -> dict[str, Any]:
+        return self._request("POST", f"/execution-requests/{request_id}/claim", {"worker_id": worker_id, "stale_after_seconds": stale_after_seconds})
+
+    def heartbeat_execution_request(self, request_id: str, worker_id: str) -> dict[str, Any]:
+        return self._request("POST", f"/execution-requests/{request_id}/heartbeat", {"worker_id": worker_id})
+
+    def start_execution_request(self, request_id: str, worker_id: str) -> dict[str, Any]:
+        return self._request("POST", f"/execution-requests/{request_id}/start", {"worker_id": worker_id})
+
+    def complete_execution_request(self, request_id: str, result_summary: dict[str, Any] | None = None, result_artifacts: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        return self._request("POST", f"/execution-requests/{request_id}/complete", {"result_summary": result_summary or {}, "result_artifacts": result_artifacts or []})
+
+    def fail_execution_request(self, request_id: str, error_summary: str, result_summary: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._request("POST", f"/execution-requests/{request_id}/fail", {"error_summary": error_summary, "result_summary": result_summary or {}})
+
+    def cancel_execution_request(self, request_id: str) -> dict[str, Any]:
+        return self._request("POST", f"/execution-requests/{request_id}/cancel")
+

@@ -12,6 +12,7 @@ final class ApiService
     private const VALID_STATUSES = ['queued', 'running', 'retrying', 'completed', 'failed', 'cancelled'];
     private const VALID_ARTIFACT_STORAGES = ['drive', 'cloud', 'local'];
     private const VALID_PROPOSAL_STATUSES = ['draft', 'queued_phase0', 'validated_phase0', 'accepted', 'rejected', 'training', 'trained'];
+    private const VALID_EXECUTION_REQUEST_STATUSES = ['pending', 'claimed', 'running', 'completed', 'failed', 'cancelled'];
 
     private $store;
 
@@ -142,6 +143,130 @@ final class ApiService
             ]
         );
         return $this->addArtifact($runId, $artifactType, $absolutePath, 'server', $checksum, $metadata);
+    }
+
+    public function createExecutionRequest(string $type, array $config = []): array
+    {
+        $request = [
+            'request_id' => 'req_' . substr(bin2hex(random_bytes(8)), 0, 12),
+            'type' => $type,
+            'status' => 'pending',
+            'config' => $config,
+            'created_at' => $this->nowIso(),
+            'updated_at' => $this->nowIso(),
+            'claimed_by_worker' => null,
+            'claimed_at' => null,
+            'heartbeat_at' => null,
+            'attempts' => 0,
+            'result_summary' => [],
+            'result_artifacts' => [],
+            'error_summary' => null,
+        ];
+        $this->store->appendExecutionRequest($request);
+        return $request;
+    }
+
+    public function listExecutionRequests(int $limit = 100, ?string $status = null): array
+    {
+        $state = $this->store->readAll();
+        $requests = array_values(is_array($state['execution_requests'] ?? null) ? $state['execution_requests'] : []);
+        if ($status !== null && $status !== '') {
+            $requests = array_values(array_filter($requests, static fn(array $request): bool => (string) ($request['status'] ?? '') === $status));
+        }
+        usort($requests, static fn(array $a, array $b): int => (strtotime((string) ($b['updated_at'] ?? '')) ?: 0) <=> (strtotime((string) ($a['updated_at'] ?? '')) ?: 0));
+        if ($limit > 0 && count($requests) > $limit) {
+            $requests = array_slice($requests, 0, $limit);
+        }
+        return $requests;
+    }
+
+    public function getExecutionRequest(string $requestId): array
+    {
+        foreach ($this->listExecutionRequests(1000) as $request) {
+            if ((string) ($request['request_id'] ?? '') === $requestId) {
+                return $request;
+            }
+        }
+        throw new RuntimeException('execution_request not found');
+    }
+
+    public function listPendingExecutionRequests(int $limit = 100, int $staleAfterSeconds = 120): array
+    {
+        $now = time();
+        $eligible = [];
+        foreach ($this->listExecutionRequests(1000) as $request) {
+            $status = (string) ($request['status'] ?? '');
+            if ($status === 'pending') {
+                $eligible[] = $request;
+                continue;
+            }
+            if (!in_array($status, ['claimed', 'running'], true)) {
+                continue;
+            }
+            $heartbeatAt = strtotime((string) ($request['heartbeat_at'] ?? '')) ?: 0;
+            if ($heartbeatAt > 0 && ($now - $heartbeatAt) > $staleAfterSeconds) {
+                $request['status'] = 'pending';
+                $request['updated_at'] = $this->nowIso();
+                $request['claimed_by_worker'] = null;
+                $request['claimed_at'] = null;
+                $this->store->replaceExecutionRequest((string) $request['request_id'], $request);
+                $eligible[] = $request;
+            }
+        }
+        usort($eligible, static fn(array $a, array $b): int => (strtotime((string) ($a['created_at'] ?? '')) ?: 0) <=> (strtotime((string) ($b['created_at'] ?? '')) ?: 0));
+        if ($limit > 0 && count($eligible) > $limit) {
+            $eligible = array_slice($eligible, 0, $limit);
+        }
+        return $eligible;
+    }
+
+    public function claimExecutionRequest(string $requestId, string $workerId, int $staleAfterSeconds = 120): array
+    {
+        $request = $this->getExecutionRequest($requestId);
+        $status = (string) ($request['status'] ?? '');
+        $heartbeatAt = strtotime((string) ($request['heartbeat_at'] ?? '')) ?: 0;
+        $isStaleClaim = in_array($status, ['claimed', 'running'], true) && $heartbeatAt > 0 && ((time() - $heartbeatAt) > $staleAfterSeconds);
+        if (!in_array($status, ['pending'], true) && !$isStaleClaim) {
+            throw new RuntimeException('execution_request not claimable');
+        }
+        $request['status'] = 'claimed';
+        $request['claimed_by_worker'] = $workerId;
+        $request['claimed_at'] = $this->nowIso();
+        $request['heartbeat_at'] = $request['claimed_at'];
+        $request['updated_at'] = $request['claimed_at'];
+        $request['attempts'] = (int) ($request['attempts'] ?? 0) + 1;
+        $this->store->replaceExecutionRequest($requestId, $request);
+        return $request;
+    }
+
+    public function heartbeatExecutionRequest(string $requestId, string $workerId): array
+    {
+        $request = $this->getExecutionRequest($requestId);
+        $request['heartbeat_at'] = $this->nowIso();
+        $request['updated_at'] = $request['heartbeat_at'];
+        $request['claimed_by_worker'] = $workerId;
+        $this->store->replaceExecutionRequest($requestId, $request);
+        return $request;
+    }
+
+    public function startExecutionRequest(string $requestId, string $workerId): array
+    {
+        return $this->updateExecutionRequestStatus($requestId, 'running', $workerId);
+    }
+
+    public function completeExecutionRequest(string $requestId, array $resultSummary = [], array $resultArtifacts = []): array
+    {
+        return $this->updateExecutionRequestStatus($requestId, 'completed', null, $resultSummary, $resultArtifacts, null);
+    }
+
+    public function failExecutionRequest(string $requestId, string $errorSummary, array $resultSummary = []): array
+    {
+        return $this->updateExecutionRequestStatus($requestId, 'failed', null, $resultSummary, [], $errorSummary);
+    }
+
+    public function cancelExecutionRequest(string $requestId): array
+    {
+        return $this->updateExecutionRequestStatus($requestId, 'cancelled');
     }
 
     public function getRun(string $runId): array
@@ -1127,6 +1252,39 @@ final class ApiService
             $parts[] = 'time ' . number_format($time, 2, '.', '') . 's';
         }
         return implode(' · ', $parts);
+    }
+
+    private function updateExecutionRequestStatus(
+        string $requestId,
+        string $status,
+        ?string $workerId = null,
+        array $resultSummary = [],
+        array $resultArtifacts = [],
+        ?string $errorSummary = null
+    ): array {
+        if (!in_array($status, self::VALID_EXECUTION_REQUEST_STATUSES, true)) {
+            throw new InvalidArgumentException('invalid execution request status');
+        }
+        $request = $this->getExecutionRequest($requestId);
+        $request['status'] = $status;
+        $request['updated_at'] = $this->nowIso();
+        if ($workerId !== null) {
+            $request['claimed_by_worker'] = $workerId;
+        }
+        if (in_array($status, ['claimed', 'running'], true)) {
+            $request['heartbeat_at'] = $this->nowIso();
+        }
+        if (!empty($resultSummary)) {
+            $request['result_summary'] = $resultSummary;
+        }
+        if (!empty($resultArtifacts)) {
+            $request['result_artifacts'] = $resultArtifacts;
+        }
+        if ($errorSummary !== null) {
+            $request['error_summary'] = $errorSummary;
+        }
+        $this->store->replaceExecutionRequest($requestId, $request);
+        return $request;
     }
 
     private function normalizeArtifactView(array $artifact): array

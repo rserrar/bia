@@ -25,6 +25,7 @@ Document de desplegament real:
 - `scripts/cleanup_inconsistent_state.py`: detecta i neteja estats inconsistents (`dry-run` / `apply`)
 - `scripts/test_api_retry_policy.py`: simula errors transitoris locals (503, 429, 200) per validar retries del client API
 - `scripts/verify_artifact_persistence.py`: valida artifacts descarregables d'un model/proposta i en guarda una copia local
+- `colab-worker/run_worker_loop.py`: worker loop canonic que reclama execution requests del servidor i les executa
 - `scripts/p0_health_check.py`: comprovació P0 (API reachable, cues pendents encallades, resum PASS/FAIL)
 - `scripts/run_trainer_supervisor.py`: manté `run_trainer.py` actiu amb auto-restart i health check cada 5 minuts
 - `scripts/run_e2e_final_smoke.py`: prova E2E final automàtica (trial LLM + trainer + validació trained/artifacts/metadata)
