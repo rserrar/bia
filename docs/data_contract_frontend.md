@@ -154,6 +154,20 @@ Checkpoints:
   - `checkpoint_uri`
   - `training_config_hash`
 
+## Resume limitation (current v1)
+
+El resume actual restaura pesos del model i epoca, pero no garanteix restauracio completa de l'estat intern de l'optimizer.
+
+Conseqüencia practica:
+
+- el training repren pesos i progrés funcionalment,
+- pero no equival encara a una restauracio bit-a-bit del training state complet.
+
+Per al frontend/auditoria, aquest comportament s'ha d'entendre com:
+
+- `resume funcional per pesos`
+- no `full optimizer state restore`
+
 Nota d'accés des d'UI:
 
 - el monitor web no ha d'enllaçar directament a `GET /artifacts/{artifact_id}/download` si l'API requereix token.

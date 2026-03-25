@@ -112,6 +112,11 @@ Increment de resumabilitat:
 - `GET /runs/{run_id}/timeline`
   - mostra `training_checkpoint_saved`, `training_interrupted`, `training_resumed`, `training_resume_failed`, `training_restarted_from_scratch`
 
+Nota de consistencia de score:
+
+- si una proposal ja esta marcada com a champion actiu, la vista de champion usa el score persistit a `llm_metadata.champion_score` com a font principal.
+- aixi s'evita desalineacio entre score de seleccio i score visualitzat al monitor.
+
 Nota de monitor:
 
 - `monitor.php` fa de proxy de descàrrega autenticat (`download_artifact_id`) per evitar exposar el token API al navegador.

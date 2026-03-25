@@ -1009,6 +1009,9 @@ final class ApiService
         if ($champion === null && count($evaluated) > 0) {
             $champion = $evaluated[0];
         }
+        if (is_array($champion)) {
+            $champion = $this->applyPersistedChampionDecision($champion, $scope);
+        }
         return [
             'scope' => $scope,
             'run_id' => $runId,
@@ -1053,6 +1056,31 @@ final class ApiService
         }
         usort($pairs, static fn(array $a, array $b): int => $b['value'] <=> $a['value']);
         return array_slice($pairs, 0, 2);
+    }
+
+    private function applyPersistedChampionDecision(array $entry, string $scope): array
+    {
+        $proposal = is_array($entry['proposal'] ?? null) ? $entry['proposal'] : [];
+        $decision = is_array($entry['decision'] ?? null) ? $entry['decision'] : [];
+        $metadata = is_array($proposal['llm_metadata'] ?? null) ? $proposal['llm_metadata'] : [];
+        if (($metadata['champion_active'] ?? false) !== true) {
+            return $entry;
+        }
+        if ((string) ($metadata['champion_scope'] ?? '') !== $scope) {
+            return $entry;
+        }
+        if (isset($metadata['champion_score']) && is_numeric($metadata['champion_score'])) {
+            $decision['score'] = (float) $metadata['champion_score'];
+        }
+        if (isset($metadata['champion_selection_reason']) && is_string($metadata['champion_selection_reason'])) {
+            $decision['selection_reason'] = (string) $metadata['champion_selection_reason'];
+        }
+        if (isset($metadata['champion_score_breakdown']) && is_array($metadata['champion_score_breakdown'])) {
+            $decision['score_breakdown'] = $metadata['champion_score_breakdown'];
+        }
+        $entry['decision'] = $decision;
+        $entry['primary_factors'] = $this->buildPrimaryFactors($decision);
+        return $entry;
     }
 
     private function inferReferenceRole(array $reference, int $index, int $total): string

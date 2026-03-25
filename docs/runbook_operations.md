@@ -137,6 +137,7 @@ Despres de provar:
 - comprovar `resume_state`
 - comprovar checkpoints a `GET /models/{proposal_id}/artifacts`
 - si hi ha `training_config_hash` mismatch, el sistema ha de reiniciar des de zero
+- limitacio actual: el resume restaura pesos i epoca, pero no estat complet de l'optimizer
 
 ### `trained_model_uri` buit o KPI absent
 
