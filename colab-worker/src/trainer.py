@@ -62,7 +62,6 @@ class TrainerFeedbackAndLimitCallback(KerasCallback):  # type: ignore[misc]
         self.start_time = 0.0
         self.api = api_client
         self.run_id = run_id
-        self.model = None
 
     def _emit_event(self, event_type: str, label: str, details: dict[str, Any] | None = None) -> None:
         if self.api is None or self.run_id.strip() == "":
