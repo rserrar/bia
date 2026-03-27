@@ -588,7 +588,10 @@ try {
         $config = [
             'profile' => is_string($_POST['profile'] ?? null) ? (string) $_POST['profile'] : 'small_test',
             'generations' => is_numeric($_POST['generations'] ?? null) ? (int) $_POST['generations'] : 1,
+            'models_per_generation' => is_numeric($_POST['models_per_generation'] ?? null) ? (int) $_POST['models_per_generation'] : 1,
             'champion_scope' => is_string($_POST['champion_scope'] ?? null) ? (string) $_POST['champion_scope'] : 'run',
+            'auto_feed' => in_array((string) ($_POST['auto_feed'] ?? '1'), ['1', 'true', 'yes'], true),
+            'resume_enabled' => in_array((string) ($_POST['resume_enabled'] ?? '1'), ['1', 'true', 'yes'], true),
         ];
         $service->createExecutionRequest($requestType, $config);
         redirectToMonitorHome();
@@ -735,31 +738,41 @@ try {
     <div class="panel">
         <form method="post" action="./monitor.php" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px;">
             <input type="hidden" name="action" value="execution_request_create">
-            <select name="request_type">
+            <label class="kpi">Tipus<br><select name="request_type">
                 <option value="smoke_run">smoke_run</option>
                 <option value="micro_training">micro_training</option>
                 <option value="integration_matrix">integration_matrix</option>
                 <option value="resume_training">resume_training</option>
                 <option value="cleanup">cleanup</option>
-            </select>
-            <select name="profile">
+            </select></label>
+            <label class="kpi">Perfil<br><select name="profile">
                 <option value="small_test">small_test</option>
                 <option value="default">default</option>
                 <option value="real_large">real_large</option>
-            </select>
-            <input type="number" name="generations" value="1" min="1" style="width:70px;">
-            <select name="champion_scope">
+            </select></label>
+            <label class="kpi">Generacions<br><input type="number" name="generations" value="1" min="1" style="width:70px;"></label>
+            <label class="kpi">Models / generació<br><input type="number" name="models_per_generation" value="1" min="1" style="width:70px;"></label>
+            <label class="kpi">Champion scope<br><select name="champion_scope">
                 <option value="run">run</option>
                 <option value="global">global</option>
-            </select>
+            </select></label>
+            <label class="kpi">Auto-feed<br><select name="auto_feed"><option value="1">on</option><option value="0">off</option></select></label>
+            <label class="kpi">Resume<br><select name="resume_enabled"><option value="1">on</option><option value="0">off</option></select></label>
             <button type="submit">Crear execució</button>
         </form>
+        <div class="kpi">small_test: Execució ràpida amb dataset petit per validar pipeline. No serveix per qualitat real.</div>
+        <div class="kpi">default: Execució estàndard amb configuració equilibrada.</div>
+        <div class="kpi">real_large: Execució amb dataset complet. Cost alt i temps llarg.</div>
+        <div class="kpi">Generacions = nombre de cicles complets (generar + entrenar). Models/generació = nombre de models nous que genera l'LLM a cada iteració.</div>
         <table>
             <thead>
                 <tr>
                     <th>Request</th>
                     <th>Type</th>
+                    <th>Description</th>
                     <th>Status</th>
+                    <th>Config</th>
+                    <th>Progress</th>
                     <th>Worker</th>
                     <th>Heartbeat</th>
                     <th>Attempts</th>
@@ -774,7 +787,10 @@ try {
                 <tr>
                     <td class="mono"><?php echo htmlspecialchars($reqId, ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($request['type'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ($request['type_description'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($request['status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><details><summary>Veure</summary><pre style="font-size:11px; margin:0; background:#1e293b; padding:4px; overflow-x:auto;"><?php echo htmlspecialchars(json_encode($request['config'] ?? [], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), ENT_QUOTES, 'UTF-8'); ?></pre></details></td>
+                    <td><?php echo htmlspecialchars((string) (($request['progress']['generations_completed'] ?? 0) . '/' . ($request['progress']['generations_total'] ?? 0)), ENT_QUOTES, 'UTF-8'); ?> · models=<?php echo htmlspecialchars((string) ($request['progress']['models_generated'] ?? 0), ENT_QUOTES, 'UTF-8'); ?>/<?php echo htmlspecialchars((string) ($request['progress']['models_trained'] ?? 0), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($request['claimed_by_worker'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($request['heartbeat_at'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($request['attempts'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>

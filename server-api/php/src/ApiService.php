@@ -147,11 +147,12 @@ final class ApiService
 
     public function createExecutionRequest(string $type, array $config = []): array
     {
+        $normalizedConfig = $this->normalizeExecutionRequestConfig($type, $config);
         $request = [
             'request_id' => 'req_' . substr(bin2hex(random_bytes(8)), 0, 12),
             'type' => $type,
             'status' => 'pending',
-            'config' => $config,
+            'config' => $normalizedConfig,
             'created_at' => $this->nowIso(),
             'updated_at' => $this->nowIso(),
             'claimed_by_worker' => null,
@@ -163,7 +164,7 @@ final class ApiService
             'error_summary' => null,
         ];
         $this->store->appendExecutionRequest($request);
-        return $request;
+        return $this->normalizeExecutionRequestView($request);
     }
 
     public function listExecutionRequests(int $limit = 100, ?string $status = null): array
@@ -177,14 +178,14 @@ final class ApiService
         if ($limit > 0 && count($requests) > $limit) {
             $requests = array_slice($requests, 0, $limit);
         }
-        return $requests;
+        return array_map(fn(array $request): array => $this->normalizeExecutionRequestView($request), $requests);
     }
 
     public function getExecutionRequest(string $requestId): array
     {
         foreach ($this->listExecutionRequests(1000) as $request) {
             if ((string) ($request['request_id'] ?? '') === $requestId) {
-                return $request;
+                return $this->normalizeExecutionRequestView($request);
             }
         }
         throw new RuntimeException('execution_request not found');
@@ -217,7 +218,7 @@ final class ApiService
         if ($limit > 0 && count($eligible) > $limit) {
             $eligible = array_slice($eligible, 0, $limit);
         }
-        return $eligible;
+        return array_map(fn(array $request): array => $this->normalizeExecutionRequestView($request), $eligible);
     }
 
     public function claimExecutionRequest(string $requestId, string $workerId, int $staleAfterSeconds = 120): array
@@ -236,7 +237,7 @@ final class ApiService
         $request['updated_at'] = $request['claimed_at'];
         $request['attempts'] = (int) ($request['attempts'] ?? 0) + 1;
         $this->store->replaceExecutionRequest($requestId, $request);
-        return $request;
+        return $this->normalizeExecutionRequestView($request);
     }
 
     public function heartbeatExecutionRequest(string $requestId, string $workerId): array
@@ -246,7 +247,7 @@ final class ApiService
         $request['updated_at'] = $request['heartbeat_at'];
         $request['claimed_by_worker'] = $workerId;
         $this->store->replaceExecutionRequest($requestId, $request);
-        return $request;
+        return $this->normalizeExecutionRequestView($request);
     }
 
     public function startExecutionRequest(string $requestId, string $workerId): array
@@ -1284,7 +1285,51 @@ final class ApiService
             $request['error_summary'] = $errorSummary;
         }
         $this->store->replaceExecutionRequest($requestId, $request);
-        return $request;
+        return $this->normalizeExecutionRequestView($request);
+    }
+
+    private function normalizeExecutionRequestConfig(string $type, array $config): array
+    {
+        return [
+            'profile' => (string) ($config['profile'] ?? 'small_test'),
+            'generations' => max(1, (int) ($config['generations'] ?? 1)),
+            'models_per_generation' => max(1, (int) ($config['models_per_generation'] ?? 1)),
+            'champion_scope' => (string) ($config['champion_scope'] ?? 'run'),
+            'auto_feed' => (bool) ($config['auto_feed'] ?? false),
+            'resume_enabled' => (bool) ($config['resume_enabled'] ?? true),
+            'execution_mode' => (string) ($config['execution_mode'] ?? 'once'),
+            'dataset_mode' => (string) ($config['dataset_mode'] ?? 'small_subset'),
+            'type_description' => $this->executionTypeDescription($type),
+        ];
+    }
+
+    private function executionTypeDescription(string $type): string
+    {
+        return match ($type) {
+            'smoke_run' => 'Execució ràpida per validar el pipeline complet amb cost baix.',
+            'micro_training' => 'Run curt amb training real per revisar loop i artifacts.',
+            'integration_matrix' => 'Bateria de runs curts per validar estabilitat del sistema.',
+            'resume_training' => 'Reprèn o reinicia entrenaments pendents segons checkpoints.',
+            'cleanup' => 'Neteja i estabilitza estats inconsistents sense entrenar models nous.',
+            default => 'Execució personalitzada.',
+        };
+    }
+
+    private function normalizeExecutionRequestView(array $request): array
+    {
+        $type = (string) ($request['type'] ?? '');
+        $config = $this->normalizeExecutionRequestConfig($type, is_array($request['config'] ?? null) ? $request['config'] : []);
+        $resultSummary = is_array($request['result_summary'] ?? null) ? $request['result_summary'] : [];
+        return array_merge($request, [
+            'config' => $config,
+            'type_description' => $this->executionTypeDescription($type),
+            'progress' => [
+                'generations_completed' => (int) ($resultSummary['generations_completed'] ?? ($resultSummary['generations'] ?? 0)),
+                'generations_total' => (int) ($config['generations'] ?? 1),
+                'models_generated' => (int) ($resultSummary['proposals_created'] ?? 0),
+                'models_trained' => (int) ($resultSummary['trained_total'] ?? ($resultSummary['proposals_validated_phase0'] ?? 0)),
+            ],
+        ]);
     }
 
     private function normalizeArtifactView(array $artifact): array

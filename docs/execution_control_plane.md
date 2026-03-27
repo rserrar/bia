@@ -24,6 +24,20 @@ Camps principals:
 - `result_artifacts`
 - `error_summary`
 
+## Config v1
+
+`execution_request.config` actual:
+
+- `profile`
+- `generations`
+- `models_per_generation`
+- `champion_scope`
+- `auto_feed`
+- `resume_enabled`
+- `execution_mode`
+- `dataset_mode`
+- `type_description`
+
 Status valids:
 
 - `pending`
@@ -40,6 +54,12 @@ Status valids:
 - `integration_matrix`
 - `resume_training`
 - `cleanup`
+
+Perfil d'execucio visible al monitor:
+
+- `small_test`: validacio rapida del pipeline amb dataset petit.
+- `default`: configuracio equilibrada.
+- `real_large`: pensat per dataset gran i cost/temps alts.
 
 ## Canonical loop
 
