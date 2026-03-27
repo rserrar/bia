@@ -260,7 +260,11 @@ try {
 
     if ($method === 'POST' && count($parts) === 3 && $parts[0] === 'execution-requests' && $parts[2] === 'heartbeat') {
         $body = jsonInput();
-        respond(200, $service->heartbeatExecutionRequest($parts[1], (string) ($body['worker_id'] ?? 'unknown_worker')));
+        respond(200, $service->heartbeatExecutionRequest(
+            $parts[1],
+            (string) ($body['worker_id'] ?? 'unknown_worker'),
+            is_array($body['result_summary'] ?? null) ? $body['result_summary'] : []
+        ));
     }
 
     if ($method === 'POST' && count($parts) === 3 && $parts[0] === 'execution-requests' && $parts[2] === 'start') {
@@ -391,6 +395,15 @@ try {
 
     if ($method === 'GET' && count($parts) === 2 && $parts[0] === 'execution-requests') {
         respond(200, $service->getExecutionRequest($parts[1]));
+    }
+
+    if ($method === 'GET' && count($parts) === 3 && $parts[0] === 'execution-requests' && $parts[2] === 'autopsy') {
+        $limitParam = $_GET['timeline_limit'] ?? '40';
+        $timelineLimit = is_numeric($limitParam) ? (int) $limitParam : 40;
+        if ($timelineLimit <= 0) {
+            $timelineLimit = 40;
+        }
+        respond(200, $service->getExecutionRequestAutopsy($parts[1], $timelineLimit));
     }
 
     if ($method === 'GET' && $parts === ['metrics']) {

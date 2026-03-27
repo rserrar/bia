@@ -334,8 +334,16 @@ class ApiClient:
     def claim_execution_request(self, request_id: str, worker_id: str, stale_after_seconds: int = 120) -> dict[str, Any]:
         return self._request("POST", f"/execution-requests/{request_id}/claim", {"worker_id": worker_id, "stale_after_seconds": stale_after_seconds})
 
-    def heartbeat_execution_request(self, request_id: str, worker_id: str) -> dict[str, Any]:
-        return self._request("POST", f"/execution-requests/{request_id}/heartbeat", {"worker_id": worker_id})
+    def heartbeat_execution_request(
+        self,
+        request_id: str,
+        worker_id: str,
+        result_summary: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"worker_id": worker_id}
+        if result_summary:
+            payload["result_summary"] = result_summary
+        return self._request("POST", f"/execution-requests/{request_id}/heartbeat", payload)
 
     def start_execution_request(self, request_id: str, worker_id: str) -> dict[str, Any]:
         return self._request("POST", f"/execution-requests/{request_id}/start", {"worker_id": worker_id})

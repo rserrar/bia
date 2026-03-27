@@ -238,7 +238,8 @@ class ModelTrainerEngine:
         if self.champion_scope not in {"run", "global"}:
             self.champion_scope = "run"
         self.checkpoint_every_epochs = max(1, int(os.getenv("V2_CHECKPOINT_EVERY_EPOCHS", "1")))
-        self.max_resume_attempts = max(1, int(os.getenv("V2_MAX_RESUME_ATTEMPTS", "2")))
+        self.resume_enabled = os.getenv("V2_RESUME_ENABLED", "true").lower() in {"1", "true", "yes"}
+        self.max_resume_attempts = max(0, int(os.getenv("V2_MAX_RESUME_ATTEMPTS", "2")))
 
     def _training_config_hash(self, model_def: dict[str, Any]) -> str:
         training_cfg = model_def.get("training_config", {}) if isinstance(model_def.get("training_config", {}), dict) else {}
@@ -269,7 +270,7 @@ class ModelTrainerEngine:
         stored_hash = str(llm_metadata.get("training_config_hash", "")).strip()
         config_match = stored_hash == "" or stored_hash == training_hash
         checkpoint_exists = checkpoint_path != "" and Path(checkpoint_path).is_file()
-        can_resume = resumable and checkpoint_artifact_id != "" and checkpoint_epoch > 0 and checkpoint_exists and config_match and resume_attempts < self.max_resume_attempts
+        can_resume = self.resume_enabled and resumable and checkpoint_artifact_id != "" and checkpoint_epoch > 0 and checkpoint_exists and config_match and resume_attempts < self.max_resume_attempts
         return {
             "training_config_hash": training_hash,
             "checkpoint_artifact_id": checkpoint_artifact_id,
@@ -278,6 +279,7 @@ class ModelTrainerEngine:
             "resume_attempts": resume_attempts,
             "config_match": config_match,
             "checkpoint_exists": checkpoint_exists,
+            "resume_enabled": self.resume_enabled,
             "can_resume": can_resume,
         }
 

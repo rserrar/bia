@@ -132,67 +132,88 @@ class EvolutionWorkerEngine:
         if not self.config.llm_enabled:
             return
         min_interval = max(0, int(self.config.llm_min_interval_seconds))
-        if min_interval > 0 and self.last_llm_call_ts > 0:
-            elapsed = time.time() - self.last_llm_call_ts
-            if elapsed < min_interval:
-                time.sleep(min_interval - elapsed)
-        context = {
-            "run_id": run_id,
-            "generation": generation,
-            "latest_metrics": metrics,
-            "code_version": self.config.code_version,
-        }
+        proposals_per_generation = max(1, int(self.config.llm_num_new_models))
         reference_models, reference_trace = self._collect_reference_models_for_prompt(run_id)
-        context["reference_models"] = reference_models
-        context["reference_selection_trace"] = reference_trace
-        try:
-            self.last_llm_call_ts = time.time()
-            print("🤖 Fent petició al LLM per generar una nova proposta. Espera si us plau...")
-            candidate = self.llm.generate_candidate(context)
-            if not candidate:
-                return
-            base_model_id = str(candidate.get("base_model_id", "")).strip() or "unknown_base_model"
-            proposal = candidate.get("proposal")
-            if not isinstance(proposal, dict) or len(proposal) == 0:
-                raise RuntimeError("LLM candidate proposal is invalid")
-            llm_metadata = candidate.get("llm_metadata")
-            llm_metadata_payload = llm_metadata if isinstance(llm_metadata, dict) else {}
-            llm_metadata_payload["from_generation"] = generation
-            
-            raw_response = llm_metadata_payload.get("raw_response", {})
-            if isinstance(raw_response, dict):
-                usage = raw_response.get("usage", {})
-                if isinstance(usage, dict):
-                    tokens = int(usage.get("total_tokens", 0) or 0)
-                    if tokens > 0:
-                        self.state.total_llm_tokens += tokens
-                        llm_metadata_payload["accumulated_run_tokens"] = self.state.total_llm_tokens
-                        max_tokens_run = int(os.getenv("V2_LLM_MAX_TOKENS_PER_RUN", "500000"))
-                        if self.state.total_llm_tokens > max_tokens_run:
-                            self.api.add_event(run_id, "llm_quota_reached", f"Quota exhaurida: {self.state.total_llm_tokens} > {max_tokens_run}")
 
-            created = self.api.create_model_proposal(
-                source_run_id=run_id,
-                base_model_id=base_model_id,
-                proposal=proposal,
-                llm_metadata=llm_metadata_payload,
-            )
-            proposal_id = str(created.get("proposal_id", ""))
-            if proposal_id != "":
-                self.api.enqueue_model_proposal_phase0(proposal_id)
-            self.api.add_event(
-                run_id,
-                "llm_proposal_created",
-                f"Proposta LLM creada a generació {generation}",
-                {"proposal_id": proposal_id, "base_model_id": base_model_id},
-            )
-        except Exception as error:
-            self.api.add_event(
-                run_id,
-                "llm_proposal_error",
-                f"Error creant proposta LLM a generació {generation}",
-                {"error": str(error)},
-            )
+        for candidate_index in range(proposals_per_generation):
+            if min_interval > 0 and self.last_llm_call_ts > 0:
+                elapsed = time.time() - self.last_llm_call_ts
+                if elapsed < min_interval:
+                    time.sleep(min_interval - elapsed)
+
+            context = {
+                "run_id": run_id,
+                "generation": generation,
+                "latest_metrics": metrics,
+                "code_version": self.config.code_version,
+                "reference_models": reference_models,
+                "reference_selection_trace": reference_trace,
+                "candidate_index": candidate_index + 1,
+                "candidates_expected": proposals_per_generation,
+            }
+
+            try:
+                self.last_llm_call_ts = time.time()
+                print(
+                    f"🤖 Fent petició al LLM per generar proposta {candidate_index + 1}/{proposals_per_generation} "
+                    f"de la generació {generation}."
+                )
+                candidate = self.llm.generate_candidate(context)
+                if not candidate:
+                    continue
+                base_model_id = str(candidate.get("base_model_id", "")).strip() or "unknown_base_model"
+                proposal = candidate.get("proposal")
+                if not isinstance(proposal, dict) or len(proposal) == 0:
+                    raise RuntimeError("LLM candidate proposal is invalid")
+                llm_metadata = candidate.get("llm_metadata")
+                llm_metadata_payload = llm_metadata if isinstance(llm_metadata, dict) else {}
+                llm_metadata_payload["from_generation"] = generation
+                llm_metadata_payload["candidate_index"] = candidate_index + 1
+                llm_metadata_payload["candidates_expected"] = proposals_per_generation
+
+                raw_response = llm_metadata_payload.get("raw_response", {})
+                if isinstance(raw_response, dict):
+                    usage = raw_response.get("usage", {})
+                    if isinstance(usage, dict):
+                        tokens = int(usage.get("total_tokens", 0) or 0)
+                        if tokens > 0:
+                            self.state.total_llm_tokens += tokens
+                            llm_metadata_payload["accumulated_run_tokens"] = self.state.total_llm_tokens
+                            max_tokens_run = int(os.getenv("V2_LLM_MAX_TOKENS_PER_RUN", "500000"))
+                            if self.state.total_llm_tokens > max_tokens_run:
+                                self.api.add_event(run_id, "llm_quota_reached", f"Quota exhaurida: {self.state.total_llm_tokens} > {max_tokens_run}")
+
+                created = self.api.create_model_proposal(
+                    source_run_id=run_id,
+                    base_model_id=base_model_id,
+                    proposal=proposal,
+                    llm_metadata=llm_metadata_payload,
+                )
+                proposal_id = str(created.get("proposal_id", ""))
+                if proposal_id != "":
+                    self.api.enqueue_model_proposal_phase0(proposal_id)
+                self.api.add_event(
+                    run_id,
+                    "llm_proposal_created",
+                    f"Proposta LLM creada a generació {generation}",
+                    {
+                        "proposal_id": proposal_id,
+                        "base_model_id": base_model_id,
+                        "candidate_index": candidate_index + 1,
+                        "candidates_expected": proposals_per_generation,
+                    },
+                )
+            except Exception as error:
+                self.api.add_event(
+                    run_id,
+                    "llm_proposal_error",
+                    f"Error creant proposta LLM a generació {generation}",
+                    {
+                        "error": str(error),
+                        "candidate_index": candidate_index + 1,
+                        "candidates_expected": proposals_per_generation,
+                    },
+                )
 
     def _collect_reference_models_for_prompt(self, run_id: str) -> tuple[list[dict[str, object]], dict[str, Any]]:
         max_refs = max(0, int(self.config.llm_num_reference_models))

@@ -9,6 +9,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Any, Callable
 
 
 def _repo_root() -> Path:
@@ -71,25 +72,48 @@ def _extract_last_json_block(text: str) -> dict:
     return json.loads(matches[-1])
 
 
-def _poll_until_trained(api_base_url: str, token: str, run_id: str, timeout_seconds: int) -> dict:
+def _emit_progress(payload: dict[str, Any]) -> None:
+    print(json.dumps({"progress_event": True, **payload}, ensure_ascii=False), flush=True)
+
+
+def _poll_until_trained(
+    api_base_url: str,
+    token: str,
+    run_id: str,
+    timeout_seconds: int,
+    on_progress: Callable[[dict[str, Any]], None] | None = None,
+) -> dict:
     started = time.time()
+    generations_total = max(1, int(os.getenv("V2_E2E_GENERATIONS", "1")))
+    models_per_generation = max(1, int(os.getenv("V2_LLM_NUM_NEW_MODELS", os.getenv("V2_MODELS_PER_GENERATION", "1"))))
+    expected_models_total = generations_total * models_per_generation
     last_seen: dict = {}
     while True:
+        run_payload, _ = _request_json("GET", api_base_url, f"/runs/{run_id}", token)
         proposals_payload, _ = _request_json("GET", api_base_url, "/model-proposals?limit=400", token)
         proposals = [
             p for p in proposals_payload.get("model_proposals", [])
             if isinstance(p, dict) and p.get("source_run_id") == run_id
         ]
         trained = [p for p in proposals if p.get("status") == "trained"]
+        rejected = [p for p in proposals if p.get("status") == "rejected"]
+        terminal = [p for p in proposals if p.get("status") in {"trained", "rejected"}]
+        active = [
+            p for p in proposals
+            if p.get("status") in {"draft", "queued_phase0", "validated_phase0", "accepted", "training"}
+        ]
 
         summary, _ = _request_json("GET", api_base_url, f"/runs/{run_id}/summary", token)
-        latest_artifact = summary.get("latest_artifact") if isinstance(summary.get("latest_artifact"), dict) else {}
-        latest_event = summary.get("latest_event") if isinstance(summary.get("latest_event"), dict) else {}
+        latest_artifact_raw = summary.get("latest_artifact")
+        latest_artifact: dict[str, Any] = dict(latest_artifact_raw) if isinstance(latest_artifact_raw, dict) else {}
+        latest_event_raw = summary.get("latest_event")
+        latest_event: dict[str, Any] = dict(latest_event_raw) if isinstance(latest_event_raw, dict) else {}
 
         proposal_meta_ok = False
         selected_proposal: dict | None = None
         for item in trained:
-            llm_metadata = item.get("llm_metadata") if isinstance(item.get("llm_metadata"), dict) else {}
+            llm_metadata_raw = item.get("llm_metadata")
+            llm_metadata: dict[str, Any] = dict(llm_metadata_raw) if isinstance(llm_metadata_raw, dict) else {}
             trained_uri = llm_metadata.get("trained_model_uri")
             training_kpis = llm_metadata.get("training_kpis")
             if isinstance(trained_uri, str) and trained_uri.strip() != "" and isinstance(training_kpis, dict) and len(training_kpis) > 0:
@@ -101,10 +125,35 @@ def _poll_until_trained(api_base_url: str, token: str, run_id: str, timeout_seco
         event_type = str(latest_event.get("event_type", ""))
         artifact_ok = artifact_type in {"trained_model", "champion_model"}
         event_ok = event_type in {"model_training_completed", "champion_selected", "champion_kept", "champion_selection_skipped"}
-        if proposal_meta_ok and artifact_ok and event_ok:
+
+        progress_payload = {
+            "stage": "training_in_progress",
+            "stage_label": "Entrenant models i esperant artifact final",
+            "run_id": run_id,
+            "current_run_id": run_id,
+            "run_ids": [run_id],
+            "run_status": run_payload.get("status"),
+            "generations_total": generations_total,
+            "generations_completed": int(run_payload.get("generation", 0) or 0),
+            "models_generated": len(proposals),
+            "models_trained": len(trained),
+            "models_rejected": len(rejected),
+            "models_expected_total": expected_models_total,
+            "latest_event_type": latest_event.get("event_type"),
+            "latest_event_label": latest_event.get("label"),
+            "latest_artifact_type": latest_artifact.get("artifact_type"),
+            "elapsed_seconds": round(time.time() - started, 2),
+        }
+        if on_progress is not None:
+            on_progress(progress_payload)
+
+        all_expected_generated = len(proposals) >= expected_models_total
+        all_models_terminal = len(terminal) >= expected_models_total and len(active) == 0
+        if proposal_meta_ok and artifact_ok and event_ok and all_expected_generated and all_models_terminal:
             return {
-                "trained_proposal": selected_proposal,
+                "trained_proposal": selected_proposal or (trained[0] if trained else {}),
                 "summary": summary,
+                "run": run_payload,
                 "all_run_proposals": proposals,
                 "elapsed_seconds": round(time.time() - started, 2),
             }
@@ -112,6 +161,9 @@ def _poll_until_trained(api_base_url: str, token: str, run_id: str, timeout_seco
         last_seen = {
             "proposals": len(proposals),
             "trained": len(trained),
+            "rejected": len(rejected),
+            "expected_models_total": expected_models_total,
+            "active": len(active),
             "latest_event_type": latest_event.get("event_type"),
             "latest_artifact_type": latest_artifact.get("artifact_type"),
         }
@@ -132,8 +184,18 @@ def main() -> int:
 
     trial_env = os.environ.copy()
     trial_env["V2_LLM_TRIAL_GENERATIONS"] = str(generations)
+    models_per_generation = int(os.getenv("V2_LLM_NUM_NEW_MODELS", os.getenv("V2_MODELS_PER_GENERATION", "1")))
 
     print(f"[e2e] start LLM trial generations={generations}")
+    _emit_progress({
+        "stage": "starting_trial",
+        "stage_label": "Inicialitzant worker per generar propostes",
+        "generations_total": generations,
+        "generations_completed": 0,
+        "models_generated": 0,
+        "models_trained": 0,
+        "models_per_generation": models_per_generation,
+    })
     trial = subprocess.run(
         [sys.executable, str(repo / "ops" / "scripts" / "run_llm_generation_trial.py")],
         cwd=str(repo),
@@ -151,6 +213,20 @@ def main() -> int:
     if run_id == "":
         raise RuntimeError("run_id missing in LLM trial output")
 
+    _emit_progress({
+        "stage": "generation_phase_completed",
+        "stage_label": "Generacions completades; iniciant training",
+        "run_id": run_id,
+        "current_run_id": run_id,
+        "run_ids": [run_id],
+        "generations_total": generations,
+        "generations_completed": int(trial_json.get("generations", generations) or generations),
+        "models_generated": int(trial_json.get("proposals_created", 0) or 0),
+        "models_trained": 0,
+        "latest_event_type": trial_json.get("latest_event_type"),
+        "latest_event_label": trial_json.get("latest_event_label"),
+    })
+
     print(f"[e2e] run_id={run_id} -> start trainer")
     trainer_env = os.environ.copy()
     trainer = subprocess.Popen(
@@ -163,7 +239,13 @@ def main() -> int:
     )
 
     try:
-        result = _poll_until_trained(api_base_url, api_token, run_id, timeout_seconds=train_timeout_seconds)
+        result = _poll_until_trained(
+            api_base_url,
+            api_token,
+            run_id,
+            timeout_seconds=train_timeout_seconds,
+            on_progress=_emit_progress,
+        )
     finally:
         trainer.terminate()
         try:
@@ -173,9 +255,21 @@ def main() -> int:
 
     trained_proposal = result.get("trained_proposal", {})
     summary = result.get("summary", {})
+    run_payload = result.get("run", {}) if isinstance(result.get("run"), dict) else {}
     output = {
         "ok": True,
         "run_id": run_id,
+        "run_ids": [run_id],
+        "current_run_id": run_id,
+        "stage": "completed",
+        "stage_label": "Execució completada correctament",
+        "generations_total": generations,
+        "generations_completed": int(run_payload.get("generation", generations) or generations),
+        "models_generated": len(result.get("all_run_proposals", []) or []),
+        "models_trained": len([
+            proposal for proposal in (result.get("all_run_proposals", []) or [])
+            if isinstance(proposal, dict) and proposal.get("status") == "trained"
+        ]),
         "elapsed_seconds": result.get("elapsed_seconds"),
         "proposal_id": trained_proposal.get("proposal_id"),
         "proposal_status": trained_proposal.get("status"),

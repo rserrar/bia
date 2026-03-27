@@ -191,6 +191,62 @@ final class ApiService
         throw new RuntimeException('execution_request not found');
     }
 
+    public function getExecutionRequestAutopsy(string $requestId, int $timelineLimit = 40): array
+    {
+        $request = $this->getExecutionRequest($requestId);
+        $resultSummary = is_array($request['result_summary'] ?? null) ? $request['result_summary'] : [];
+        $runIds = array_values(array_filter(
+            array_map(static fn($runId): string => is_string($runId) ? trim($runId) : '', (array) ($request['run_ids'] ?? [])),
+            static fn(string $runId): bool => $runId !== ''
+        ));
+        $lifecycle = $this->buildExecutionLifecycle($request);
+        $runs = [];
+        foreach ($runIds as $runId) {
+            $runs[] = $this->buildExecutionRunAutopsy($runId, $timelineLimit);
+        }
+
+        return [
+            'request_id' => (string) ($request['request_id'] ?? ''),
+            'status' => (string) ($request['status'] ?? ''),
+            'type' => (string) ($request['type'] ?? ''),
+            'type_description' => (string) ($request['type_description'] ?? ''),
+            'config' => is_array($request['config'] ?? null) ? $request['config'] : [],
+            'worker' => [
+                'claimed_by_worker' => (string) ($request['claimed_by_worker'] ?? ''),
+                'attempts' => (int) ($request['attempts'] ?? 0),
+                'claimed_at' => (string) ($request['claimed_at'] ?? ''),
+                'heartbeat_at' => (string) ($request['heartbeat_at'] ?? ''),
+            ],
+            'timing' => [
+                'created_at' => (string) ($request['created_at'] ?? ''),
+                'started_at' => (string) ($request['started_at'] ?? ''),
+                'completed_at' => (string) ($request['completed_at'] ?? ''),
+                'elapsed_seconds' => $request['elapsed_seconds'] ?? null,
+            ],
+            'progress' => is_array($request['progress'] ?? null) ? $request['progress'] : [],
+            'run_ids' => $runIds,
+            'current_run_id' => (string) ($request['current_run_id'] ?? ''),
+            'current_stage' => (string) ($request['current_stage'] ?? ''),
+            'current_stage_label' => (string) ($request['current_stage_label'] ?? ''),
+            'error_summary' => $request['error_summary'] ?? null,
+            'outcome' => [
+                'final_status' => (string) ($request['status'] ?? ''),
+                'latest_event_type' => (string) ($resultSummary['latest_event_type'] ?? ''),
+                'latest_artifact_type' => (string) ($resultSummary['latest_artifact_type'] ?? ''),
+                'proposal_id' => (string) ($resultSummary['proposal_id'] ?? ''),
+                'proposal_status' => (string) ($resultSummary['proposal_status'] ?? ''),
+                'trained_model_uri' => $resultSummary['trained_model_uri'] ?? null,
+                'training_kpis_keys' => array_values(array_filter(
+                    array_map(static fn($key): string => is_string($key) ? $key : '', (array) ($resultSummary['training_kpis_keys'] ?? [])),
+                    static fn(string $key): bool => $key !== ''
+                )),
+            ],
+            'lifecycle' => $lifecycle,
+            'log_excerpt' => $this->buildExecutionLogExcerpt((string) ($resultSummary['output_tail'] ?? '')),
+            'runs' => $runs,
+        ];
+    }
+
     public function listPendingExecutionRequests(int $limit = 100, int $staleAfterSeconds = 120): array
     {
         $now = time();
@@ -240,12 +296,16 @@ final class ApiService
         return $this->normalizeExecutionRequestView($request);
     }
 
-    public function heartbeatExecutionRequest(string $requestId, string $workerId): array
+    public function heartbeatExecutionRequest(string $requestId, string $workerId, array $resultSummary = []): array
     {
         $request = $this->getExecutionRequest($requestId);
         $request['heartbeat_at'] = $this->nowIso();
         $request['updated_at'] = $request['heartbeat_at'];
         $request['claimed_by_worker'] = $workerId;
+        if (!empty($resultSummary)) {
+            $currentSummary = is_array($request['result_summary'] ?? null) ? $request['result_summary'] : [];
+            $request['result_summary'] = array_merge($currentSummary, $resultSummary);
+        }
         $this->store->replaceExecutionRequest($requestId, $request);
         return $this->normalizeExecutionRequestView($request);
     }
@@ -663,6 +723,30 @@ final class ApiService
             $events = array_slice($events, -$limit);
         }
         return $events;
+    }
+
+    public function listRunArtifacts(string $runId, int $limit = 200): array
+    {
+        $state = $this->store->readAll();
+        if (!isset($state['runs'][$runId])) {
+            throw new RuntimeException('run not found');
+        }
+        $artifacts = array_values(array_filter(
+            is_array($state['artifacts'] ?? null) ? $state['artifacts'] : [],
+            static fn(array $artifact): bool => (string) ($artifact['run_id'] ?? '') === $runId
+        ));
+        usort(
+            $artifacts,
+            static function (array $a, array $b): int {
+                $aTs = strtotime((string) ($a['timestamp'] ?? '')) ?: 0;
+                $bTs = strtotime((string) ($b['timestamp'] ?? '')) ?: 0;
+                return $aTs <=> $bTs;
+            }
+        );
+        if ($limit > 0 && count($artifacts) > $limit) {
+            $artifacts = array_slice($artifacts, -$limit);
+        }
+        return $artifacts;
     }
 
     public function createModelProposal(
@@ -1276,7 +1360,8 @@ final class ApiService
             $request['heartbeat_at'] = $this->nowIso();
         }
         if (!empty($resultSummary)) {
-            $request['result_summary'] = $resultSummary;
+            $currentSummary = is_array($request['result_summary'] ?? null) ? $request['result_summary'] : [];
+            $request['result_summary'] = array_merge($currentSummary, $resultSummary);
         }
         if (!empty($resultArtifacts)) {
             $request['result_artifacts'] = $resultArtifacts;
@@ -1320,16 +1405,164 @@ final class ApiService
         $type = (string) ($request['type'] ?? '');
         $config = $this->normalizeExecutionRequestConfig($type, is_array($request['config'] ?? null) ? $request['config'] : []);
         $resultSummary = is_array($request['result_summary'] ?? null) ? $request['result_summary'] : [];
+        $runIds = [];
+        foreach ((array) ($resultSummary['run_ids'] ?? []) as $runId) {
+            if (is_string($runId) && trim($runId) !== '') {
+                $runIds[] = trim($runId);
+            }
+        }
+        $currentRunId = (string) ($resultSummary['current_run_id'] ?? $resultSummary['run_id'] ?? '');
+        if ($currentRunId !== '' && !in_array($currentRunId, $runIds, true)) {
+            $runIds[] = $currentRunId;
+        }
+        $claimedAt = strtotime((string) ($request['claimed_at'] ?? '')) ?: 0;
+        $updatedAt = strtotime((string) ($request['updated_at'] ?? '')) ?: 0;
+        $elapsedSeconds = null;
+        if ($claimedAt > 0 && $updatedAt > 0 && $updatedAt >= $claimedAt) {
+            $elapsedSeconds = $updatedAt - $claimedAt;
+        }
+        $generationsCompleted = (int) ($resultSummary['generations_completed'] ?? ($resultSummary['generations'] ?? 0));
+        $generationsTotal = (int) ($config['generations'] ?? 1);
+        $modelsGenerated = (int) ($resultSummary['models_generated'] ?? ($resultSummary['proposals_created'] ?? 0));
+        $modelsTrained = (int) ($resultSummary['models_trained'] ?? ($resultSummary['trained_total'] ?? ($resultSummary['proposals_validated_phase0'] ?? 0)));
+        $progressPercent = 0.0;
+        if ($generationsTotal > 0) {
+            $progressPercent = min(100.0, round((($generationsCompleted + ($modelsGenerated > $modelsTrained ? 0.35 : 0.0)) / $generationsTotal) * 100.0, 1));
+        }
         return array_merge($request, [
             'config' => $config,
             'type_description' => $this->executionTypeDescription($type),
             'progress' => [
-                'generations_completed' => (int) ($resultSummary['generations_completed'] ?? ($resultSummary['generations'] ?? 0)),
-                'generations_total' => (int) ($config['generations'] ?? 1),
-                'models_generated' => (int) ($resultSummary['proposals_created'] ?? 0),
-                'models_trained' => (int) ($resultSummary['trained_total'] ?? ($resultSummary['proposals_validated_phase0'] ?? 0)),
+                'generations_completed' => $generationsCompleted,
+                'generations_total' => $generationsTotal,
+                'models_generated' => $modelsGenerated,
+                'models_trained' => $modelsTrained,
+                'progress_percent' => $progressPercent,
             ],
+            'current_stage' => (string) ($resultSummary['stage'] ?? ''),
+            'current_stage_label' => (string) ($resultSummary['stage_label'] ?? ''),
+            'current_run_id' => $currentRunId,
+            'run_ids' => $runIds,
+            'started_at' => (string) ($request['claimed_at'] ?? ''),
+            'completed_at' => in_array((string) ($request['status'] ?? ''), ['completed', 'failed', 'cancelled'], true) ? (string) ($request['updated_at'] ?? '') : '',
+            'elapsed_seconds' => $elapsedSeconds,
         ]);
+    }
+
+    private function buildExecutionLifecycle(array $request): array
+    {
+        $steps = [
+            [
+                'status' => 'pending',
+                'timestamp' => (string) ($request['created_at'] ?? ''),
+                'label' => 'Execution request creada',
+                'completed' => ((string) ($request['created_at'] ?? '')) !== '',
+            ],
+            [
+                'status' => 'claimed',
+                'timestamp' => (string) ($request['claimed_at'] ?? ''),
+                'label' => 'Worker ha reclamat l\'execuci\u00f3',
+                'completed' => ((string) ($request['claimed_at'] ?? '')) !== '',
+            ],
+            [
+                'status' => 'running',
+                'timestamp' => (string) ($request['started_at'] ?? $request['heartbeat_at'] ?? ''),
+                'label' => 'Execuci\u00f3 en curs',
+                'completed' => in_array((string) ($request['status'] ?? ''), ['running', 'completed', 'failed', 'cancelled'], true),
+            ],
+            [
+                'status' => (string) ($request['status'] ?? ''),
+                'timestamp' => (string) ($request['completed_at'] ?? ''),
+                'label' => $this->executionFinalStatusLabel((string) ($request['status'] ?? '')),
+                'completed' => in_array((string) ($request['status'] ?? ''), ['completed', 'failed', 'cancelled'], true),
+            ],
+        ];
+        return array_values(array_filter($steps, static fn(array $step): bool => (bool) ($step['completed'] ?? false) || (string) ($step['status'] ?? '') === 'running'));
+    }
+
+    private function executionFinalStatusLabel(string $status): string
+    {
+        return match ($status) {
+            'completed' => 'Execuci\u00f3 completada',
+            'failed' => 'Execuci\u00f3 fallida',
+            'cancelled' => 'Execuci\u00f3 cancel\u00b7lada',
+            default => 'Execuci\u00f3 en progr\u00e9s',
+        };
+    }
+
+    private function buildExecutionRunAutopsy(string $runId, int $timelineLimit): array
+    {
+        $summary = $this->getSummary($runId);
+        $timelinePayload = $this->getRunTimeline($runId, $timelineLimit);
+        $timeline = is_array($timelinePayload['timeline'] ?? null) ? $timelinePayload['timeline'] : [];
+        $proposals = array_values(array_filter(
+            $this->listModelProposals(1000),
+            static fn(array $proposal): bool => (string) ($proposal['source_run_id'] ?? '') === $runId
+        ));
+        $artifacts = $this->listRunArtifacts($runId, 200);
+
+        return [
+            'run_id' => $runId,
+            'run' => is_array($summary['run'] ?? null) ? $summary['run'] : [],
+            'summary_text' => (string) ($summary['summary_text'] ?? ''),
+            'counts' => is_array($summary['counts'] ?? null) ? $summary['counts'] : [],
+            'proposals_by_status' => is_array($summary['proposals_by_status'] ?? null) ? $summary['proposals_by_status'] : [],
+            'latest_event' => $summary['latest_event'] ?? null,
+            'latest_artifact' => $summary['latest_artifact'] ?? null,
+            'timeline' => $timeline,
+            'proposals' => array_map(fn(array $proposal): array => $this->buildExecutionProposalSummary($proposal), $proposals),
+            'artifacts' => array_map(fn(array $artifact): array => $this->normalizeArtifactView($artifact), $artifacts),
+        ];
+    }
+
+    private function buildExecutionProposalSummary(array $proposal): array
+    {
+        $llmMetadata = is_array($proposal['llm_metadata'] ?? null) ? $proposal['llm_metadata'] : [];
+        return [
+            'proposal_id' => (string) ($proposal['proposal_id'] ?? ''),
+            'status' => (string) ($proposal['status'] ?? ''),
+            'base_model_id' => (string) ($proposal['base_model_id'] ?? ''),
+            'updated_at' => (string) ($proposal['updated_at'] ?? ''),
+            'trained_model_uri' => $llmMetadata['trained_model_uri'] ?? null,
+            'resumable' => (bool) ($llmMetadata['resumable'] ?? false),
+            'last_checkpoint_epoch' => $llmMetadata['last_checkpoint_epoch'] ?? null,
+            'training_kpis' => is_array($llmMetadata['training_kpis'] ?? null) ? $llmMetadata['training_kpis'] : [],
+            'champion_active' => (bool) ($llmMetadata['champion_active'] ?? false),
+            'champion_scope' => (string) ($llmMetadata['champion_scope'] ?? ''),
+        ];
+    }
+
+    private function buildExecutionLogExcerpt(string $outputTail, int $maxLines = 40): array
+    {
+        if (trim($outputTail) === '') {
+            return [
+                'line_count' => 0,
+                'tail_lines' => [],
+                'interesting_lines' => [],
+            ];
+        }
+        $lines = preg_split('/\r\n|\r|\n/', trim($outputTail)) ?: [];
+        $tailLines = array_slice($lines, -$maxLines);
+        $interestingLines = array_values(array_filter(
+            $lines,
+            static function (string $line): bool {
+                $normalized = strtolower($line);
+                return str_contains($normalized, 'error')
+                    || str_contains($normalized, 'fail')
+                    || str_contains($normalized, 'traceback')
+                    || str_contains($normalized, 'run_id=')
+                    || str_contains($normalized, 'trainer')
+                    || str_contains($normalized, 'checkpoint')
+                    || str_contains($normalized, 'proposal')
+                    || str_contains($normalized, 'completed');
+            }
+        ));
+
+        return [
+            'line_count' => count($lines),
+            'tail_lines' => array_values($tailLines),
+            'interesting_lines' => array_values(array_slice($interestingLines, -20)),
+        ];
     }
 
     private function normalizeArtifactView(array $artifact): array

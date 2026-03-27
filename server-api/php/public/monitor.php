@@ -66,6 +66,46 @@ function redirectToMonitorHome(): void
     exit;
 }
 
+function formatDurationShort($seconds): string
+{
+    if (!is_numeric($seconds)) {
+        return '-';
+    }
+    $total = max(0, (int) round((float) $seconds));
+    $hours = intdiv($total, 3600);
+    $minutes = intdiv($total % 3600, 60);
+    $secs = $total % 60;
+    if ($hours > 0) {
+        return sprintf('%dh %02dm', $hours, $minutes);
+    }
+    if ($minutes > 0) {
+        return sprintf('%dm %02ds', $minutes, $secs);
+    }
+    return sprintf('%ds', $secs);
+}
+
+function estimateExecutionDurationMinutes(array $config): int
+{
+    $profile = strtolower((string) ($config['profile'] ?? 'small_test'));
+    $generations = max(1, (int) ($config['generations'] ?? 1));
+    $modelsPerGeneration = max(1, (int) ($config['models_per_generation'] ?? 1));
+    $perModel = match ($profile) {
+        'real_large' => 18,
+        'default' => 8,
+        default => 4,
+    };
+    return max(2, $generations * $modelsPerGeneration * $perModel);
+}
+
+function executionProfileExplanation(string $profile): string
+{
+    return match (strtolower($profile)) {
+        'real_large' => 'Dataset gran i execució costosa; orientat a qualitat real.',
+        'default' => 'Configuració equilibrada entre temps i qualitat.',
+        default => 'Execució ràpida per validar pipeline i control operatiu.',
+    };
+}
+
 function monitorCredentials(): array
 {
     return [
@@ -617,6 +657,13 @@ try {
         echo json_encode($timeline, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
         exit;
     }
+    $executionAutopsyId = is_string($_GET['execution_autopsy_id'] ?? null) ? (string) $_GET['execution_autopsy_id'] : '';
+    if ($executionAutopsyId !== '') {
+        $autopsy = monitorApiRequest('/execution-requests/' . rawurlencode($executionAutopsyId) . '/autopsy?timeline_limit=40');
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode($autopsy, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+        exit;
+    }
     $downloadArtifactId = is_string($_GET['download_artifact_id'] ?? null) ? (string) $_GET['download_artifact_id'] : '';
     if ($downloadArtifactId !== '') {
         streamMonitorApiDownload('/artifacts/' . rawurlencode($downloadArtifactId) . '/download');
@@ -760,10 +807,12 @@ try {
             <label class="kpi">Resume<br><select name="resume_enabled"><option value="1">on</option><option value="0">off</option></select></label>
             <button type="submit">Crear execució</button>
         </form>
-        <div class="kpi">small_test: Execució ràpida amb dataset petit per validar pipeline. No serveix per qualitat real.</div>
-        <div class="kpi">default: Execució estàndard amb configuració equilibrada.</div>
-        <div class="kpi">real_large: Execució amb dataset complet. Cost alt i temps llarg.</div>
-        <div class="kpi">Generacions = nombre de cicles complets (generar + entrenar). Models/generació = nombre de models nous que genera l'LLM a cada iteració.</div>
+        <div class="kpi">Què fa: el servidor crea el pla, el worker de Colab el reclama i executa el cicle complet sense tocar scripts manuals.</div>
+        <div class="kpi">Generacions = nombre de cicles complets. Models/generació = quants candidats nous intenta generar l'LLM a cada cicle.</div>
+        <div class="kpi">small_test: Execució ràpida amb dataset petit per validar pipeline. Durada típica: 4-8 min per model.</div>
+        <div class="kpi">default: Configuració equilibrada per iterar amb més qualitat. Durada típica: 8-15 min per model.</div>
+        <div class="kpi">real_large: Dataset gran i cost alt; pensat per runs llargs i més fiables. Durada típica: 18-30 min per model.</div>
+        <div class="kpi">Auto-feed: si la cua queda buida, el supervisor pot generar feina nova. Resume: intenta reprendre entrenaments amb checkpoints compatibles.</div>
         <table>
             <thead>
                 <tr>
@@ -771,12 +820,17 @@ try {
                     <th>Type</th>
                     <th>Description</th>
                     <th>Status</th>
+                    <th>Plan</th>
                     <th>Config</th>
                     <th>Progress</th>
+                    <th>Run IDs</th>
+                    <th>Stage</th>
+                    <th>Timing</th>
                     <th>Worker</th>
                     <th>Heartbeat</th>
                     <th>Attempts</th>
                     <th>Result</th>
+                    <th>Autòpsia</th>
                     <th>Acció</th>
                 </tr>
             </thead>
@@ -784,17 +838,27 @@ try {
             <?php foreach ($executionRequests as $request): ?>
                 <?php if (!is_array($request)) { continue; } ?>
                 <?php $reqId = (string) ($request['request_id'] ?? ''); ?>
+                <?php $requestConfig = is_array($request['config'] ?? null) ? $request['config'] : []; ?>
+                <?php $requestProgress = is_array($request['progress'] ?? null) ? $request['progress'] : []; ?>
+                <?php $requestRunIds = is_array($request['run_ids'] ?? null) ? $request['run_ids'] : []; ?>
+                <?php $estimatedMinutes = estimateExecutionDurationMinutes($requestConfig); ?>
+                <?php $elapsedLabel = formatDurationShort($request['elapsed_seconds'] ?? null); ?>
                 <tr>
                     <td class="mono"><?php echo htmlspecialchars($reqId, ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($request['type'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($request['type_description'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($request['status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
-                    <td><details><summary>Veure</summary><pre style="font-size:11px; margin:0; background:#1e293b; padding:4px; overflow-x:auto;"><?php echo htmlspecialchars(json_encode($request['config'] ?? [], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), ENT_QUOTES, 'UTF-8'); ?></pre></details></td>
-                    <td><?php echo htmlspecialchars((string) (($request['progress']['generations_completed'] ?? 0) . '/' . ($request['progress']['generations_total'] ?? 0)), ENT_QUOTES, 'UTF-8'); ?> · models=<?php echo htmlspecialchars((string) ($request['progress']['models_generated'] ?? 0), ENT_QUOTES, 'UTF-8'); ?>/<?php echo htmlspecialchars((string) ($request['progress']['models_trained'] ?? 0), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) (($requestConfig['generations'] ?? 1) . ' gen · ' . ($requestConfig['models_per_generation'] ?? 1) . ' models/gen'), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi"><?php echo htmlspecialchars(executionProfileExplanation((string) ($requestConfig['profile'] ?? 'small_test')), ENT_QUOTES, 'UTF-8'); ?></span></td>
+                    <td><details><summary>Veure</summary><pre style="font-size:11px; margin:0; background:#1e293b; padding:4px; overflow-x:auto;"><?php echo htmlspecialchars(json_encode($requestConfig, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), ENT_QUOTES, 'UTF-8'); ?></pre></details></td>
+                    <td><?php echo htmlspecialchars((string) (($requestProgress['generations_completed'] ?? 0) . '/' . ($requestProgress['generations_total'] ?? 0)), ENT_QUOTES, 'UTF-8'); ?> · models=<?php echo htmlspecialchars((string) ($requestProgress['models_generated'] ?? 0), ENT_QUOTES, 'UTF-8'); ?>/<?php echo htmlspecialchars((string) ($requestProgress['models_trained'] ?? 0), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi"><?php echo htmlspecialchars((string) ($requestProgress['progress_percent'] ?? 0), ENT_QUOTES, 'UTF-8'); ?>% completat</span></td>
+                    <td><?php echo htmlspecialchars((string) ($request['current_run_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi mono"><?php echo htmlspecialchars(implode(', ', array_slice(array_map('strval', $requestRunIds), 0, 3)), ENT_QUOTES, 'UTF-8'); ?></span></td>
+                    <td><?php echo htmlspecialchars((string) (($request['current_stage_label'] ?? '') ?: ($request['current_stage'] ?? '')), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi"><?php echo htmlspecialchars((string) (($request['result_summary']['latest_event_type'] ?? '') ?: ($request['result_summary']['latest_artifact_type'] ?? '')), ENT_QUOTES, 'UTF-8'); ?></span></td>
+                    <td>estimació <?php echo htmlspecialchars((string) $estimatedMinutes, ENT_QUOTES, 'UTF-8'); ?> min<br><span class="kpi">elapsed <?php echo htmlspecialchars($elapsedLabel, ENT_QUOTES, 'UTF-8'); ?></span></td>
                     <td><?php echo htmlspecialchars((string) ($request['claimed_by_worker'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($request['heartbeat_at'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($request['attempts'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><details><summary>Veure</summary><pre style="font-size:11px; margin:0; background:#1e293b; padding:4px; overflow-x:auto;"><?php echo htmlspecialchars(json_encode($request['result_summary'] ?? [], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), ENT_QUOTES, 'UTF-8'); ?></pre></details></td>
+                    <td><a href="./monitor.php?execution_autopsy_id=<?php echo rawurlencode($reqId); ?>" target="_blank" rel="noreferrer">Veure</a></td>
                     <td>
                         <?php if (in_array((string) ($request['status'] ?? ''), ['pending', 'claimed', 'running'], true)): ?>
                             <form method="post" action="./monitor.php">

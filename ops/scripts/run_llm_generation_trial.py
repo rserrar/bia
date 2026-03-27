@@ -122,6 +122,8 @@ def main() -> int:
         raise RuntimeError("V2_API_BASE_URL is required")
 
     generations = int(os.getenv("V2_LLM_TRIAL_GENERATIONS", "4"))
+    models_per_generation = max(1, int(os.getenv("V2_LLM_NUM_NEW_MODELS", os.getenv("V2_MODELS_PER_GENERATION", "1"))))
+    expected_models_total = generations * models_per_generation
     print(f"[trial] iniciant prova LLM · generations={generations}")
     os.environ["V2_MAX_GENERATIONS"] = str(generations)
     os.environ["V2_HEARTBEAT_INTERVAL_SECONDS"] = os.getenv("V2_LLM_TRIAL_HEARTBEAT_SECONDS", "5")
@@ -190,7 +192,7 @@ def main() -> int:
     if run_id == "":
         raise RuntimeError("run_id not found in checkpoint")
 
-    flush_limit = max(20, generations * 3)
+    flush_limit = max(20, expected_models_total * 2)
     for _ in range(3):
         _request_json(
             "POST",
@@ -224,9 +226,11 @@ def main() -> int:
     validated = [p for p in proposals if p.get("status") == "validated_phase0"]
 
     output = {
-        "ok": len(proposals) >= generations and len(validated) >= generations,
+        "ok": len(proposals) >= expected_models_total and len(validated) >= expected_models_total,
         "run_id": run_id,
         "generations": generations,
+        "models_per_generation": models_per_generation,
+        "expected_models_total": expected_models_total,
         "proposals_created": len(proposals),
         "proposals_validated_phase0": len(validated),
         "llm_created_events": len(llm_created_events),
