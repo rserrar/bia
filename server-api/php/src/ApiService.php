@@ -183,12 +183,21 @@ final class ApiService
 
     public function getExecutionRequest(string $requestId): array
     {
-        foreach ($this->listExecutionRequests(1000) as $request) {
-            if ((string) ($request['request_id'] ?? '') === $requestId) {
-                return $this->normalizeExecutionRequestView($request);
-            }
+        return $this->normalizeExecutionRequestView($this->getRawExecutionRequest($requestId));
+    }
+
+    public function updateExecutionRequestConfig(string $requestId, array $configUpdates): array
+    {
+        $request = $this->getRawExecutionRequest($requestId);
+        $status = (string) ($request['status'] ?? '');
+        if (in_array($status, ['completed', 'failed', 'cancelled'], true)) {
+            throw new RuntimeException('cannot update terminal execution request');
         }
-        throw new RuntimeException('execution_request not found');
+        $currentConfig = is_array($request['config'] ?? null) ? $request['config'] : [];
+        $request['config'] = $this->normalizeExecutionRequestConfig((string) ($request['type'] ?? ''), array_merge($currentConfig, $configUpdates));
+        $request['updated_at'] = $this->nowIso();
+        $this->store->replaceExecutionRequest($requestId, $request);
+        return $this->normalizeExecutionRequestView($request);
     }
 
     public function getExecutionRequestAutopsy(string $requestId, int $timelineLimit = 40): array
@@ -1380,6 +1389,8 @@ final class ApiService
             'profile' => (string) ($config['profile'] ?? 'small_test'),
             'generations' => max(1, (int) ($config['generations'] ?? 1)),
             'models_per_generation' => max(1, (int) ($config['models_per_generation'] ?? 1)),
+            'max_epochs' => max(0, (int) ($config['max_epochs'] ?? 0)),
+            'max_training_seconds' => max(0, (int) ($config['max_training_seconds'] ?? 0)),
             'champion_scope' => (string) ($config['champion_scope'] ?? 'run'),
             'auto_feed' => (bool) ($config['auto_feed'] ?? false),
             'resume_enabled' => (bool) ($config['resume_enabled'] ?? true),
@@ -1458,6 +1469,18 @@ final class ApiService
             'completed_at' => in_array((string) ($request['status'] ?? ''), ['completed', 'failed', 'cancelled'], true) ? (string) ($request['updated_at'] ?? '') : '',
             'elapsed_seconds' => $elapsedSeconds,
         ]);
+    }
+
+    private function getRawExecutionRequest(string $requestId): array
+    {
+        $state = $this->store->readAll();
+        $requests = array_values(is_array($state['execution_requests'] ?? null) ? $state['execution_requests'] : []);
+        foreach ($requests as $request) {
+            if ((string) ($request['request_id'] ?? '') === $requestId) {
+                return $request;
+            }
+        }
+        throw new RuntimeException('execution_request not found');
     }
 
     private function buildExecutionLifecycle(array $request): array

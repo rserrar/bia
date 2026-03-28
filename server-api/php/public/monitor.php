@@ -713,12 +713,24 @@ try {
         $_SESSION['monitor_auto_refresh'] = in_array((string) ($_POST['enabled'] ?? '1'), ['1', 'true', 'yes'], true);
         redirectToMonitorHome();
     }
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && (string) ($_POST['action'] ?? '') === 'execution_request_update_limits') {
+        $requestId = is_string($_POST['request_id'] ?? null) ? (string) $_POST['request_id'] : '';
+        if ($requestId !== '') {
+            $_SESSION['execution_limits_result'] = $service->updateExecutionRequestConfig($requestId, [
+                'max_epochs' => is_numeric($_POST['max_epochs'] ?? null) ? (int) $_POST['max_epochs'] : 0,
+                'max_training_seconds' => is_numeric($_POST['max_training_seconds'] ?? null) ? (int) $_POST['max_training_seconds'] : 0,
+            ]);
+        }
+        redirectToMonitorHome();
+    }
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && (string) ($_POST['action'] ?? '') === 'execution_request_create') {
         $requestType = is_string($_POST['request_type'] ?? null) ? (string) $_POST['request_type'] : 'smoke_run';
         $config = [
             'profile' => is_string($_POST['profile'] ?? null) ? (string) $_POST['profile'] : 'small_test',
             'generations' => is_numeric($_POST['generations'] ?? null) ? (int) $_POST['generations'] : 1,
             'models_per_generation' => is_numeric($_POST['models_per_generation'] ?? null) ? (int) $_POST['models_per_generation'] : 1,
+            'max_epochs' => is_numeric($_POST['max_epochs'] ?? null) ? (int) $_POST['max_epochs'] : 0,
+            'max_training_seconds' => is_numeric($_POST['max_training_seconds'] ?? null) ? (int) $_POST['max_training_seconds'] : 0,
             'champion_scope' => is_string($_POST['champion_scope'] ?? null) ? (string) $_POST['champion_scope'] : 'run',
             'auto_feed' => in_array((string) ($_POST['auto_feed'] ?? '1'), ['1', 'true', 'yes'], true),
             'resume_enabled' => in_array((string) ($_POST['resume_enabled'] ?? '1'), ['1', 'true', 'yes'], true),
@@ -884,6 +896,7 @@ try {
         $resetResult = is_array($_SESSION['reset_result'] ?? null) ? $_SESSION['reset_result'] : null; unset($_SESSION['reset_result']); 
         $evalResult = is_array($_SESSION['eval_result'] ?? null) ? $_SESSION['eval_result'] : null; unset($_SESSION['eval_result']); 
         $showResetConfirm = (string) ($_GET['confirm_reset'] ?? '') === '1';
+        $limitsResult = is_array($_SESSION['execution_limits_result'] ?? null) ? $_SESSION['execution_limits_result'] : null; unset($_SESSION['execution_limits_result']);
     ?>
     <div class="meta">Actualització automàtica <?php echo $autoRefreshEnabled ? 'activada (15s)' : 'desactivada'; ?> · Runs: <?php echo count($runs); ?> · <a href="./monitor.php?logout=1">Sortir</a></div>
     <div class="meta">Selection policy: <span class="mono"><?php echo htmlspecialchars((string) ($championBoard['policy_version'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span> · profile: <span class="mono"><?php echo htmlspecialchars((string) ($championBoard['policy_profile'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span></div>
@@ -907,6 +920,9 @@ try {
         <?php endif; ?>
         <?php if ($evalResult !== null): ?>
             <span class="notice">Models avaluats (KPIs): <?php echo (int) ($evalResult['evaluated_count'] ?? 0); ?></span>
+        <?php endif; ?>
+        <?php if ($limitsResult !== null): ?>
+            <span class="notice">Límits actualitzats per <span class="mono"><?php echo htmlspecialchars((string) ($limitsResult['request_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span> · max_epochs=<?php echo (int) (($limitsResult['config']['max_epochs'] ?? 0)); ?> · max_training_seconds=<?php echo (int) (($limitsResult['config']['max_training_seconds'] ?? 0)); ?>s</span>
         <?php endif; ?>
     </div>
 
@@ -936,6 +952,8 @@ try {
                 <div class="field-card"><label class="kpi">Perfil<br><select name="profile" id="profile"><option value="small_test">small_test</option><option value="default">default</option><option value="real_large">real_large</option></select><span class="field-help" id="profile_help">Execució ràpida per validar pipeline i control operatiu.</span></label></div>
                 <div class="field-card"><label class="kpi">Generacions<br><input type="number" name="generations" id="generations" value="1" min="1" style="width:70px;"><span class="field-help">Nombre de cicles complets (generar + entrenar models)</span></label></div>
                 <div class="field-card"><label class="kpi">Models / generació<br><input type="number" name="models_per_generation" id="models_per_generation" value="1" min="1" style="width:70px;"><span class="field-help">Nombre de models nous que es generaran per cada generació</span></label></div>
+                <div class="field-card"><label class="kpi">Límit d'èpoques<br><input type="number" name="max_epochs" id="max_epochs" value="0" min="0" style="width:70px;"><span class="field-help">Nombre màxim d’èpoques per entrenament (0 = usar la definició del model)</span></label></div>
+                <div class="field-card"><label class="kpi">Límit de temps<br><input type="number" name="max_training_seconds" id="max_training_seconds" value="0" min="0" style="width:70px;"><span class="field-help">Temps màxim per entrenament en segons (0 = sense límit extra)</span></label></div>
                 <div class="field-card"><label class="kpi">Champion scope<br><select name="champion_scope" id="champion_scope"><option value="run">run</option><option value="global">global</option></select><span class="field-help">Defineix si el champion es decideix dins del run o globalment</span></label></div>
                 <div class="field-card"><label class="kpi">Auto-feed<br><select name="auto_feed" id="auto_feed"><option value="1">on</option><option value="0">off</option></select><span class="field-help">Permet que el sistema generi nous models automàticament</span></label></div>
                 <div class="field-card"><label class="kpi">Resume<br><select name="resume_enabled" id="resume_enabled"><option value="1">on</option><option value="0">off</option></select><span class="field-help">Permet reprendre entrenaments interromputs des de checkpoint</span></label></div>
@@ -948,6 +966,7 @@ try {
                 <div class="kpi" id="plan-profile-line">Perfil small_test · Execució ràpida per validar pipeline i control operatiu.</div>
                 <div class="kpi" id="plan-type-line">Tipus smoke_run · Prova ràpida end-to-end.</div>
                 <div class="kpi" id="plan-options-line">Resume activat · champion run</div>
+                <div class="kpi" id="plan-limits-line">Límits: epochs model · temps lliure</div>
                 <div class="kpi" id="plan-duration-line">Estimació de durada: 4 min</div>
             </div>
             <div class="inline-actions"><button type="submit">Crear execució</button></div>
@@ -1003,7 +1022,7 @@ try {
                     <td><?php echo htmlspecialchars((string) ($request['type'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($request['type_description'] ?? ''), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi"><?php echo htmlspecialchars(requestTypeExplanation((string) ($request['type'] ?? '')), ENT_QUOTES, 'UTF-8'); ?></span></td>
                     <td><span class="<?php echo $statusClass; ?>"><?php echo htmlspecialchars($statusValue, ENT_QUOTES, 'UTF-8'); ?></span><?php if (!empty($alertBadges)): ?><div class="badge-row" style="margin-top:6px;"><?php foreach ($alertBadges as $badge): ?><span class="badge <?php echo htmlspecialchars((string) ($badge['class'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars((string) ($badge['label'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span><?php endforeach; ?></div><?php endif; ?></td>
-                    <td><?php echo htmlspecialchars((string) (($requestConfig['generations'] ?? 1) . ' gen · ' . ($requestConfig['models_per_generation'] ?? 1) . ' models/gen'), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi"><?php echo htmlspecialchars(executionProfileExplanation((string) ($requestConfig['profile'] ?? 'small_test')), ENT_QUOTES, 'UTF-8'); ?></span></td>
+                    <td><?php echo htmlspecialchars((string) (($requestConfig['generations'] ?? 1) . ' gen · ' . ($requestConfig['models_per_generation'] ?? 1) . ' models/gen'), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi"><?php echo htmlspecialchars(executionProfileExplanation((string) ($requestConfig['profile'] ?? 'small_test')), ENT_QUOTES, 'UTF-8'); ?></span><br><span class="kpi">epochs=<?php echo htmlspecialchars((string) ($requestConfig['max_epochs'] ?? 0), ENT_QUOTES, 'UTF-8'); ?> · max_s=<?php echo htmlspecialchars((string) ($requestConfig['max_training_seconds'] ?? 0), ENT_QUOTES, 'UTF-8'); ?></span></td>
                     <td><details><summary>Veure</summary><pre style="font-size:11px; margin:0; background:#1e293b; padding:4px; overflow-x:auto;"><?php echo htmlspecialchars(json_encode($requestConfig, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), ENT_QUOTES, 'UTF-8'); ?></pre></details></td>
                     <td><?php echo htmlspecialchars((string) (($requestProgress['generations_completed'] ?? 0) . '/' . ($requestProgress['generations_total'] ?? 0)), ENT_QUOTES, 'UTF-8'); ?> · models=<?php echo htmlspecialchars((string) ($requestProgress['models_generated'] ?? 0), ENT_QUOTES, 'UTF-8'); ?>/<?php echo htmlspecialchars((string) ($requestProgress['models_trained'] ?? 0), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi"><?php echo htmlspecialchars((string) ($requestProgress['progress_percent'] ?? 0), ENT_QUOTES, 'UTF-8'); ?>% completat</span></td>
                     <td><?php echo htmlspecialchars((string) ($request['current_run_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi mono"><?php echo htmlspecialchars(implode(', ', array_slice(array_map('strval', $requestRunIds), 0, 3)), ENT_QUOTES, 'UTF-8'); ?></span></td>
@@ -1041,6 +1060,15 @@ try {
                             <?php echo hiddenConfigInputs((string) ($request['type'] ?? ''), $requestConfig); ?>
                             <button type="submit">Executar de nou amb mateix config</button>
                         </form>
+                        <?php if (in_array((string) ($request['status'] ?? ''), ['pending', 'claimed', 'running'], true)): ?>
+                            <form method="post" action="./monitor.php" class="inline-actions">
+                                <input type="hidden" name="action" value="execution_request_update_limits">
+                                <input type="hidden" name="request_id" value="<?php echo htmlspecialchars($reqId, ENT_QUOTES, 'UTF-8'); ?>">
+                                <input type="number" name="max_epochs" value="<?php echo htmlspecialchars((string) ($requestConfig['max_epochs'] ?? 0), ENT_QUOTES, 'UTF-8'); ?>" min="0" style="width:72px;" title="Límit d'èpoques">
+                                <input type="number" name="max_training_seconds" value="<?php echo htmlspecialchars((string) ($requestConfig['max_training_seconds'] ?? 0), ENT_QUOTES, 'UTF-8'); ?>" min="0" style="width:86px;" title="Límit de temps">
+                                <button type="submit">Aplicar límits</button>
+                            </form>
+                        <?php endif; ?>
                         <?php if (in_array((string) ($request['status'] ?? ''), ['pending', 'claimed', 'running'], true)): ?>
                             <form method="post" action="./monitor.php">
                                 <input type="hidden" name="action" value="execution_request_cancel">
@@ -1488,6 +1516,7 @@ try {
             const profileLine = document.getElementById('plan-profile-line');
             const typeLine = document.getElementById('plan-type-line');
             const optionsLine = document.getElementById('plan-options-line');
+            const limitsLine = document.getElementById('plan-limits-line');
             const durationLine = document.getElementById('plan-duration-line');
 
             const requestTypeDescriptions = {
@@ -1522,6 +1551,10 @@ try {
                 const estimatedMinutes = Math.max(2, total * (perModelMinutes[profile] || 4));
                 const resumeEnabled = form.elements['resume_enabled'].value === '1' ? 'Resume activat' : 'Resume desactivat';
                 const championScope = 'champion ' + form.elements['champion_scope'].value;
+                const maxEpochs = asPositiveInt(form.elements['max_epochs'].value, 0);
+                const maxTrainingSeconds = asPositiveInt(form.elements['max_training_seconds'].value, 0);
+                const epochsLabel = maxEpochs > 0 ? ('màxim ' + maxEpochs + ' èpoques') : 'èpoques del model';
+                const timeLabel = maxTrainingSeconds > 0 ? ('màxim ' + maxTrainingSeconds + 's') : 'temps lliure';
 
                 requestTypeHelp.textContent = requestTypeDescriptions[requestType] || 'Tipus d’execució personalitzat.';
                 profileHelp.textContent = profileDescriptions[profile] || '';
@@ -1529,6 +1562,7 @@ try {
                 profileLine.textContent = 'Perfil ' + profile + ' · ' + (profileDescriptions[profile] || '');
                 typeLine.textContent = 'Tipus ' + requestType + ' · ' + (requestTypeDescriptions[requestType] || '');
                 optionsLine.textContent = resumeEnabled + ' · ' + championScope;
+                limitsLine.textContent = 'Límits: ' + epochsLabel + ' · ' + timeLabel;
                 durationLine.textContent = 'Estimació de durada: ' + estimatedMinutes + ' min';
             }
 

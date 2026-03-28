@@ -14,8 +14,10 @@ def main():
     print("Iniciant V2 Trainer Worker...")
     config = load_worker_config()
     
-    # Podem injectar el max_training_seconds via variable d'entorn
+    # Podem injectar limits des del control plane via variables d'entorn
     tiempo_limite = int(os.environ.get("V2_TRAINER_MAX_SECONDS", 0))
+    max_epochs = int(os.environ.get("V2_MAX_EPOCHS", 0))
+    execution_request_id = os.environ.get("V2_EXECUTION_REQUEST_ID", "").strip()
 
     api = ApiClient(
         base_url=config.api_base_url,
@@ -32,12 +34,16 @@ def main():
     # L'engine d'entrenament pesat necessita aquesta configuracio i limits
     engine = ModelTrainerEngine(api, {
         "max_training_seconds": tiempo_limite,
+        "max_epochs": max_epochs,
+        "execution_request_id": execution_request_id,
         "repo_root": str(repo_root)
     })
     
     print(f"Trainer configurat cap a l'API V2 a {config.api_base_url}{config.api_path_prefix}")
     if tiempo_limite > 0:
-         print(f"Mode de prova activat: Entrenaments de max {tiempo_limite}s")
+          print(f"Mode de prova activat: Entrenaments de max {tiempo_limite}s")
+    if max_epochs > 0:
+         print(f"Mode de prova activat: Entrenaments de max {max_epochs} èpoques")
          
     engine.run_loop()
 

@@ -240,6 +240,8 @@ class ModelTrainerEngine:
             
         self.config = config
         self.max_seconds_per_model = int(config.get("max_training_seconds", 0))
+        self.max_epochs_per_model = max(0, int(config.get("max_epochs", 0)))
+        self.execution_request_id = str(config.get("execution_request_id", "")).strip()
         self.selection_policy_config = load_policy_config_from_env()
         self.champion_scope = os.getenv("V2_CHAMPION_SCOPE", "run").strip().lower()
         if self.champion_scope not in {"run", "global"}:
@@ -328,11 +330,30 @@ class ModelTrainerEngine:
                 pass
         gc.collect()
 
+    def _runtime_training_limits(self) -> tuple[int, int]:
+        max_epochs = self.max_epochs_per_model
+        max_training_seconds = self.max_seconds_per_model
+        if self.execution_request_id == "":
+            return max_epochs, max_training_seconds
+        try:
+            request = self.api.get_execution_request(self.execution_request_id)
+            raw_config = request.get("config")
+            config = raw_config if isinstance(raw_config, dict) else {}
+            max_epochs = max(0, int(config.get("max_epochs", max_epochs) or 0))
+            max_training_seconds = max(0, int(config.get("max_training_seconds", max_training_seconds) or 0))
+        except Exception:
+            return max_epochs, max_training_seconds
+        return max_epochs, max_training_seconds
+
     def _current_memory_mb(self) -> float | None:
         if resource is None:
             return None
         try:
-            usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            getrusage = getattr(resource, "getrusage", None)
+            rusage_self = getattr(resource, "RUSAGE_SELF", None)
+            if getrusage is None or rusage_self is None:
+                return None
+            usage = getrusage(rusage_self).ru_maxrss
             if usage <= 0:
                 return None
             if os.name == "posix":
@@ -465,6 +486,18 @@ class ModelTrainerEngine:
             model_def = proposal.get("proposal", {}).get("model_definition", {})
             if not model_def:
                 raise RuntimeError("El payload no conté `model_definition`.")
+            active_max_epochs, active_max_training_seconds = self._runtime_training_limits()
+
+            training_config_raw = model_def.get("training_config")
+            training_config = training_config_raw if isinstance(training_config_raw, dict) else {}
+            model_def["training_config"] = training_config
+            fit_config_raw = training_config.get("fit")
+            fit_config = fit_config_raw if isinstance(fit_config_raw, dict) else {}
+            training_config["fit"] = fit_config
+            original_epochs = int(fit_config.get("epochs", 15) or 15)
+            if active_max_epochs > 0:
+                fit_config["epochs"] = active_max_epochs
+            effective_epochs = int(fit_config.get("epochs", 15) or 15)
 
             model_def["model_id"] = proposal_id
             resume_state = self._resolve_resume_state(proposal, model_def)
@@ -505,14 +538,14 @@ class ModelTrainerEngine:
             checkpoint_path = checkpoint_dir / f"{proposal_id}.weights.h5"
             
             # Parametrització temporal o definitiva?
-            epochs = model_def.get("training_config", {}).get("fit", {}).get("epochs", 15)
+            epochs = effective_epochs
             batch_sz = model_def.get("training_config", {}).get("fit", {}).get("batch_size", 64)
             
             # Protecció contra èpoques excessives si cal fer testing ràpid
             callbacks = [
                 TrainerFeedbackAndLimitCallback(
                     proposal_id,
-                    self.max_seconds_per_model,
+                    active_max_training_seconds,
                     api_client=self.api,
                     run_id=run_id,
                 ),
@@ -647,6 +680,10 @@ class ModelTrainerEngine:
             metrics['data_prep_seconds'] = data_prep_seconds
             metrics['model_build_seconds'] = model_build_seconds
             metrics['fit_seconds'] = round(float(elapsed), 3)
+            metrics['configured_max_epochs'] = active_max_epochs
+            metrics['effective_epochs_limit'] = int(epochs)
+            metrics['original_model_epochs'] = int(original_epochs)
+            metrics['configured_max_training_seconds'] = active_max_training_seconds
             metrics['memory_mb_before_data_prep'] = memory_before_data_prep_mb
             metrics['memory_mb_after_data_prep'] = memory_after_data_prep_mb
             metrics['memory_mb_after_model_build'] = memory_after_model_build_mb

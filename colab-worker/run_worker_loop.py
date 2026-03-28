@@ -244,6 +244,8 @@ def _execute_request(client: ApiClient, request_id: str, request: dict, worker_i
     profile = str(config.get("profile", "small_test"))
     generations_int = _as_positive_int(config.get("generations", 1), 1)
     models_per_generation_int = _as_positive_int(config.get("models_per_generation", 1), 1)
+    max_epochs_int = _as_non_negative_int(config.get("max_epochs", 0), 0)
+    max_training_seconds_int = _as_non_negative_int(config.get("max_training_seconds", 0), 0)
     generations = str(generations_int)
     models_per_generation = str(models_per_generation_int)
     extra_env = {
@@ -252,6 +254,9 @@ def _execute_request(client: ApiClient, request_id: str, request: dict, worker_i
         "V2_E2E_GENERATIONS": generations,
         "V2_LLM_NUM_NEW_MODELS": models_per_generation,
         "V2_MODELS_PER_GENERATION": models_per_generation,
+        "V2_MAX_EPOCHS": str(max_epochs_int),
+        "V2_TRAINER_MAX_SECONDS": str(max_training_seconds_int),
+        "V2_EXECUTION_REQUEST_ID": request_id,
         "V2_BOOTSTRAP_SEED_MODEL_IF_EMPTY": "true" if bool(config.get("bootstrap_seed_model_if_empty", False)) else "false",
         "V2_AUTO_PROCESS_PROPOSALS_PHASE0": "true" if bool(config.get("auto_process_proposals_phase0", True)) else "false",
         "V2_LLM_MIN_INTERVAL_SECONDS": str(_as_non_negative_int(config.get("llm_min_interval_seconds", os.getenv("V2_LLM_MIN_INTERVAL_SECONDS", "20")), 20)),
@@ -268,6 +273,8 @@ def _execute_request(client: ApiClient, request_id: str, request: dict, worker_i
         "generations_total": generations_int,
         "generations_completed": 0,
         "models_per_generation": models_per_generation_int,
+        "max_epochs": max_epochs_int,
+        "max_training_seconds": max_training_seconds_int,
         "models_generated": 0,
         "models_trained": 0,
         "run_ids": [],
