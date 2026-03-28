@@ -9,6 +9,11 @@ import traceback
 from pathlib import Path
 from typing import Any, Optional, cast
 
+try:
+    import resource
+except ImportError:
+    resource = None
+
 from shared.utils.selection_policy import evaluate_reference_candidate, load_policy_config_from_env
 
 try:
@@ -323,6 +328,19 @@ class ModelTrainerEngine:
                 pass
         gc.collect()
 
+    def _current_memory_mb(self) -> float | None:
+        if resource is None:
+            return None
+        try:
+            usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            if usage <= 0:
+                return None
+            if os.name == "posix":
+                return round(float(usage) / 1024.0, 2)
+            return round(float(usage) / (1024.0 * 1024.0), 2)
+        except Exception:
+            return None
+
     def _training_config_hash(self, model_def: dict[str, Any]) -> str:
         training_cfg = model_def.get("training_config", {}) if isinstance(model_def.get("training_config", {}), dict) else {}
         payload = json.dumps(training_cfg, ensure_ascii=False, sort_keys=True)
@@ -431,6 +449,9 @@ class ModelTrainerEngine:
         run_id = str(proposal.get("source_run_id", ""))
         keras_model = None
         history = None
+        training_succeeded = False
+        model_training_metrics: dict[str, Any] = {}
+        pipeline_started_at = time.time()
         X_train: list[Any] = []
         Y_train: list[Any] = []
         X_val: list[Any] = []
@@ -447,6 +468,7 @@ class ModelTrainerEngine:
 
             model_def["model_id"] = proposal_id
             resume_state = self._resolve_resume_state(proposal, model_def)
+            memory_before_data_prep_mb = self._current_memory_mb()
 
             (
                 _load_all_raw_data_sources,
@@ -464,15 +486,21 @@ class ModelTrainerEngine:
             model_def["output_targets_config_runtime"] = output_cfg
 
             print("🔨 Preparant tensors específics del model a partir de dades cachejades...")
+            data_prep_started_at = time.time()
             X_list, Y_list, in_names, out_names = prepare_model_specific_inputs_outputs(all_data, model_def)
             (X_train, Y_train), (X_val, Y_val), (X_test, Y_test), scalers = split_and_scale_data(X_list, Y_list, in_names, exp_config, model_def)
+            data_prep_seconds = round(time.time() - data_prep_started_at, 3)
             del X_list, Y_list, in_names, out_names, X_test, Y_test, scalers
             X_test = []
             Y_test = []
             scalers = {}
+            memory_after_data_prep_mb = self._current_memory_mb()
 
             print("🏗️ Construint el graf Keras del model...")
+            model_build_started_at = time.time()
             keras_model = build_model_from_json_definition(model_def)
+            model_build_seconds = round(time.time() - model_build_started_at, 3)
+            memory_after_model_build_mb = self._current_memory_mb()
             checkpoint_dir = self._checkpoint_dir_for_proposal(proposal_id)
             checkpoint_path = checkpoint_dir / f"{proposal_id}.weights.h5"
             
@@ -616,6 +644,13 @@ class ModelTrainerEngine:
                 metrics['val_loss_total'] = float(history.history.get('val_loss', history.history['loss'])[-1])
                 metrics['train_loss'] = float(history.history['loss'][-1])
                 metrics['training_time_seconds'] = elapsed
+            metrics['data_prep_seconds'] = data_prep_seconds
+            metrics['model_build_seconds'] = model_build_seconds
+            metrics['fit_seconds'] = round(float(elapsed), 3)
+            metrics['memory_mb_before_data_prep'] = memory_before_data_prep_mb
+            metrics['memory_mb_after_data_prep'] = memory_after_data_prep_mb
+            metrics['memory_mb_after_model_build'] = memory_after_model_build_mb
+            metrics['memory_mb_after_fit'] = self._current_memory_mb()
 
             print(f"🟢 Entrenament del model {proposal_id} complet! Reportant estatus a l'API.")
 
@@ -633,6 +668,7 @@ class ModelTrainerEngine:
             model_storage = "drive" if "/content/drive" in str(trained_model_path).replace("\\", "/") else "local"
             artifact_record = None
             print(f"📡 API: pujant artifact trained_model per {proposal_id}...")
+            artifact_upload_started_at = time.time()
             try:
                 artifact_record = self.api.upload_artifact_file(
                     run_id,
@@ -658,6 +694,9 @@ class ModelTrainerEngine:
                     )
                 except Exception as fallback_artifact_error:
                     print(f"⚠️ API: no s'ha pogut registrar artifact local ({fallback_artifact_error})")
+            metrics['artifact_upload_seconds'] = round(time.time() - artifact_upload_started_at, 3)
+            metrics['memory_mb_after_artifact_upload'] = self._current_memory_mb()
+            metrics['total_pipeline_seconds'] = round(time.time() - pipeline_started_at, 3)
 
             artifact_metadata = artifact_record.get("metadata", {}) if isinstance(artifact_record, dict) and isinstance(artifact_record.get("metadata"), dict) else {}
 
@@ -689,6 +728,8 @@ class ModelTrainerEngine:
             print(f"📡 API: enviant event model_training_completed per {proposal_id}...")
             self.api.add_event(run_id, "model_training_completed", f"El model acceptat {proposal_id} s'ha entrenat.", {"metrics": metrics})
             print("✅ API: event model_training_completed enviat")
+            training_succeeded = True
+            model_training_metrics = dict(metrics)
 
             self._update_champion_selection(run_id)
 
@@ -711,6 +752,7 @@ class ModelTrainerEngine:
             except Exception as event_error:
                 print(f"⚠️ API: no s'ha pogut enviar event failed ({event_error})")
         finally:
+            cleanup_started_at = time.time()
             if keras_model is not None:
                 try:
                     del keras_model
@@ -722,6 +764,28 @@ class ModelTrainerEngine:
                 except Exception:
                     pass
             self._release_training_memory(X_train, Y_train, X_val, Y_val, X_test, Y_test, scalers)
+            cleanup_seconds = round(time.time() - cleanup_started_at, 3)
+            if training_succeeded and proposal_id != "" and run_id != "":
+                cleanup_payload = {
+                    "training_kpis": {
+                        **model_training_metrics,
+                        "cleanup_seconds": cleanup_seconds,
+                        "memory_mb_after_cleanup": self._current_memory_mb(),
+                    }
+                }
+                try:
+                    self.api.update_proposal_status(proposal_id, "trained", cleanup_payload)
+                except Exception:
+                    pass
+                try:
+                    self.api.add_event(
+                        run_id,
+                        "training_resource_summary",
+                        f"Resum de recursos d'entrenament per {proposal_id}",
+                        cleanup_payload,
+                    )
+                except Exception:
+                    pass
 
     def _update_champion_selection(self, run_id: str) -> None:
         try:

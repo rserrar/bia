@@ -131,6 +131,67 @@ function executionReferenceSummary(array $resultSummary): string
     return $referenceId . ' · ' . $reason;
 }
 
+function requestTypeExplanation(string $requestType): string
+{
+    return match ($requestType) {
+        'smoke_run' => 'Prova ràpida end-to-end.',
+        'micro_training' => 'Entrenament curt real.',
+        'integration_matrix' => 'Múltiples runs per validar consistència.',
+        'resume_training' => 'Reprèn entrenaments interromputs.',
+        'cleanup' => 'Neteja estat inconsistent.',
+        default => 'Tipus d’execució personalitzat.',
+    };
+}
+
+function artifactAvailabilityLabel(array $resultSummary): string
+{
+    $artifactType = (string) ($resultSummary['latest_artifact_type'] ?? '');
+    return $artifactType === '' ? 'missing' : 'available';
+}
+
+function requestAlertBadges(array $request): array
+{
+    $status = (string) ($request['status'] ?? '');
+    $heartbeatAt = strtotime((string) ($request['heartbeat_at'] ?? '')) ?: 0;
+    $updatedAt = strtotime((string) ($request['updated_at'] ?? '')) ?: 0;
+    $now = time();
+    $progress = is_array($request['progress'] ?? null) ? $request['progress'] : [];
+    $generationsCompleted = (int) ($progress['generations_completed'] ?? 0);
+    $modelsGenerated = (int) ($progress['models_generated'] ?? 0);
+    $elapsedSeconds = (int) ($request['elapsed_seconds'] ?? 0);
+    $badges = [];
+
+    if ($status === 'failed') {
+        $badges[] = ['label' => 'failed', 'class' => 'badge-danger'];
+    }
+    if ($status === 'cancelled') {
+        $badges[] = ['label' => 'cancelled', 'class' => 'badge-muted'];
+    }
+    if (in_array($status, ['claimed', 'running'], true) && $heartbeatAt > 0 && ($now - $heartbeatAt) > 120) {
+        $badges[] = ['label' => 'stale heartbeat', 'class' => 'badge-warning'];
+        $badges[] = ['label' => 'reclaimable', 'class' => 'badge-warning'];
+    }
+    if ($status === 'running' && $elapsedSeconds >= 60 && $generationsCompleted === 0 && $modelsGenerated === 0) {
+        $badges[] = ['label' => 'running sense progrés', 'class' => 'badge-warning'];
+    }
+    if ($status === 'claimed' && $updatedAt > 0 && ($now - $updatedAt) > 45) {
+        $badges[] = ['label' => 'esperant worker', 'class' => 'badge-muted'];
+    }
+
+    return $badges;
+}
+
+function hiddenConfigInputs(string $requestType, array $config): string
+{
+    $inputs = '<input type="hidden" name="action" value="execution_request_create">';
+    $inputs .= '<input type="hidden" name="request_type" value="' . htmlspecialchars($requestType, ENT_QUOTES, 'UTF-8') . '">';
+    foreach ($config as $key => $value) {
+        $serialized = is_bool($value) ? ($value ? '1' : '0') : (string) $value;
+        $inputs .= '<input type="hidden" name="' . htmlspecialchars((string) $key, ENT_QUOTES, 'UTF-8') . '" value="' . htmlspecialchars($serialized, ENT_QUOTES, 'UTF-8') . '">';
+    }
+    return $inputs;
+}
+
 function monitorCredentials(): array
 {
     return [
@@ -648,6 +709,10 @@ try {
         }
         redirectToMonitorHome();
     }
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && (string) ($_POST['action'] ?? '') === 'toggle_auto_refresh') {
+        $_SESSION['monitor_auto_refresh'] = in_array((string) ($_POST['enabled'] ?? '1'), ['1', 'true', 'yes'], true);
+        redirectToMonitorHome();
+    }
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && (string) ($_POST['action'] ?? '') === 'execution_request_create') {
         $requestType = is_string($_POST['request_type'] ?? null) ? (string) $_POST['request_type'] : 'smoke_run';
         $config = [
@@ -740,6 +805,10 @@ try {
     $runSummary = is_array($runSummaryPayload) ? $runSummaryPayload : [];
     $compareCandidateA = count($modelShortlist) > 0 && is_array($modelShortlist[0]) ? (string) ($modelShortlist[0]['proposal_id'] ?? '') : '';
     $compareCandidateB = count($modelShortlist) > 1 && is_array($modelShortlist[1]) ? (string) ($modelShortlist[1]['proposal_id'] ?? '') : '';
+    if (!isset($_SESSION['monitor_auto_refresh'])) {
+        $_SESSION['monitor_auto_refresh'] = true;
+    }
+    $autoRefreshEnabled = ($_SESSION['monitor_auto_refresh'] ?? true) === true;
 } catch (Throwable $error) {
     http_response_code(500);
     header('Content-Type: text/plain; charset=utf-8');
@@ -752,7 +821,9 @@ try {
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <?php if ($autoRefreshEnabled): ?>
     <meta http-equiv="refresh" content="15">
+    <?php endif; ?>
     <title>V2 Monitor</title>
     <style>
         body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 20px; }
@@ -779,7 +850,32 @@ try {
         .toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; }
         .danger { border-color: #ef4444; color: #fecaca; }
         .notice { color: #93c5fd; }
-        select, button { background: #0b1220; color: #e2e8f0; border: 1px solid #334155; padding: 4px 6px; border-radius: 4px; }
+        select, button, input { background: #0b1220; color: #e2e8f0; border: 1px solid #334155; padding: 4px 6px; border-radius: 4px; }
+        .section-header { display:flex; align-items:center; justify-content:space-between; gap:12px; margin: 24px 0 12px 0; }
+        .section-header h2 { margin: 0; }
+        .form-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:12px; margin-bottom:16px; }
+        .field-card { background:#0b1220; border:1px solid #1f2937; border-radius:8px; padding:10px; }
+        .field-card label { display:block; }
+        .field-help { display:block; margin-top:6px; color:#94a3b8; font-size:12px; line-height:1.35; }
+        .plan-summary { background:#0b1220; border:1px solid #334155; border-radius:8px; padding:12px; margin-bottom:12px; }
+        .plan-summary strong { color:#f8fafc; }
+        .stack { display:flex; flex-direction:column; gap:8px; }
+        .badge-row { display:flex; flex-wrap:wrap; gap:6px; }
+        .badge { display:inline-flex; align-items:center; gap:4px; border-radius:999px; padding:3px 8px; font-size:12px; font-weight:600; border:1px solid transparent; }
+        .badge-warning { background:#422006; color:#fde68a; border-color:#92400e; }
+        .badge-danger { background:#3f1518; color:#fecaca; border-color:#b91c1c; }
+        .badge-muted { background:#172033; color:#cbd5e1; border-color:#475569; }
+        .badge-success { background:#052e16; color:#bbf7d0; border-color:#166534; }
+        .status-pill { display:inline-block; padding:4px 8px; border-radius:999px; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:0.03em; }
+        .status-pill-completed { background:#052e16; color:#bbf7d0; }
+        .status-pill-running { background:#422006; color:#fde68a; }
+        .status-pill-failed { background:#3f1518; color:#fecaca; }
+        .status-pill-cancelled { background:#172033; color:#cbd5e1; }
+        .status-pill-pending, .status-pill-claimed { background:#1e293b; color:#bfdbfe; }
+        .inline-actions { display:flex; flex-wrap:wrap; gap:8px; }
+        .summary-card { background:#0b1220; border:1px solid #1f2937; border-radius:8px; padding:10px; }
+        .summary-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap:8px; }
+        .summary-label { color:#94a3b8; font-size:12px; margin-bottom:3px; }
     </style>
 </head>
 <body>
@@ -789,7 +885,7 @@ try {
         $evalResult = is_array($_SESSION['eval_result'] ?? null) ? $_SESSION['eval_result'] : null; unset($_SESSION['eval_result']); 
         $showResetConfirm = (string) ($_GET['confirm_reset'] ?? '') === '1';
     ?>
-    <div class="meta">Actualització automàtica cada 15s · Runs: <?php echo count($runs); ?> · <a href="./monitor.php?logout=1">Sortir</a></div>
+    <div class="meta">Actualització automàtica <?php echo $autoRefreshEnabled ? 'activada (15s)' : 'desactivada'; ?> · Runs: <?php echo count($runs); ?> · <a href="./monitor.php?logout=1">Sortir</a></div>
     <div class="meta">Selection policy: <span class="mono"><?php echo htmlspecialchars((string) ($championBoard['policy_version'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span> · profile: <span class="mono"><?php echo htmlspecialchars((string) ($championBoard['policy_profile'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span></div>
     <div class="toolbar">
         <form method="post" action="./monitor.php">
@@ -800,6 +896,11 @@ try {
         <form method="get" action="./monitor.php">
             <input type="hidden" name="confirm_reset" value="1">
             <button type="submit" class="danger">Reset dades prova</button>
+        </form>
+        <form method="post" action="./monitor.php">
+            <input type="hidden" name="action" value="toggle_auto_refresh">
+            <input type="hidden" name="enabled" value="<?php echo $autoRefreshEnabled ? '0' : '1'; ?>">
+            <button type="submit"><?php echo $autoRefreshEnabled ? 'Aturar auto-actualització' : 'Activar auto-actualització'; ?></button>
         </form>
         <?php if ($resetResult !== null): ?>
             <span class="notice">Reset fet · Runs: <?php echo (int) ($resetResult['deleted']['runs'] ?? 0); ?> · Events: <?php echo (int) ($resetResult['deleted']['events'] ?? 0); ?> · Metrics: <?php echo (int) ($resetResult['deleted']['metrics'] ?? 0); ?> · Artifacts: <?php echo (int) ($resetResult['deleted']['artifacts'] ?? 0); ?> · Proposals: <?php echo (int) ($resetResult['deleted']['model_proposals'] ?? 0); ?> · Exec requests: <?php echo (int) ($resetResult['deleted']['execution_requests'] ?? 0); ?> · Fitxers artifact: <?php echo (int) ($resetResult['deleted']['artifact_files'] ?? 0); ?></span>
@@ -823,42 +924,43 @@ try {
     </div>
     <?php endif; ?>
 
-    <h2>Control Panel</h2>
+    <div class="section-header">
+        <h2>Nova execució</h2>
+        <span class="kpi">Entén el pla abans d’executar-lo al worker.</span>
+    </div>
     <div class="panel">
-        <form method="post" action="./monitor.php" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px;">
+        <form method="post" action="./monitor.php" id="execution-create-form">
             <input type="hidden" name="action" value="execution_request_create">
-            <label class="kpi">Tipus<br><select name="request_type">
-                <option value="smoke_run">smoke_run</option>
-                <option value="micro_training">micro_training</option>
-                <option value="integration_matrix">integration_matrix</option>
-                <option value="resume_training">resume_training</option>
-                <option value="cleanup">cleanup</option>
-            </select></label>
-            <label class="kpi">Perfil<br><select name="profile">
-                <option value="small_test">small_test</option>
-                <option value="default">default</option>
-                <option value="real_large">real_large</option>
-            </select></label>
-            <label class="kpi">Generacions<br><input type="number" name="generations" value="1" min="1" style="width:70px;"></label>
-            <label class="kpi">Models / generació<br><input type="number" name="models_per_generation" value="1" min="1" style="width:70px;"></label>
-            <label class="kpi">Champion scope<br><select name="champion_scope">
-                <option value="run">run</option>
-                <option value="global">global</option>
-            </select></label>
-            <label class="kpi">Auto-feed<br><select name="auto_feed"><option value="1">on</option><option value="0">off</option></select></label>
-            <label class="kpi">Resume<br><select name="resume_enabled"><option value="1">on</option><option value="0">off</option></select></label>
-            <label class="kpi">Seed inicial<br><select name="bootstrap_seed_model_if_empty"><option value="0">off</option><option value="1">on</option></select></label>
-            <label class="kpi">Auto phase0<br><select name="auto_process_proposals_phase0"><option value="1">on</option><option value="0">off</option></select></label>
-            <label class="kpi">LLM interval<br><input type="number" name="llm_min_interval_seconds" value="20" min="0" style="width:70px;"></label>
-            <button type="submit">Crear execució</button>
+            <div class="form-grid">
+                <div class="field-card"><label class="kpi">Tipus<br><select name="request_type" id="request_type"><option value="smoke_run">smoke_run</option><option value="micro_training">micro_training</option><option value="integration_matrix">integration_matrix</option><option value="resume_training">resume_training</option><option value="cleanup">cleanup</option></select><span class="field-help" id="request_type_help">Prova ràpida end-to-end.</span></label></div>
+                <div class="field-card"><label class="kpi">Perfil<br><select name="profile" id="profile"><option value="small_test">small_test</option><option value="default">default</option><option value="real_large">real_large</option></select><span class="field-help" id="profile_help">Execució ràpida per validar pipeline i control operatiu.</span></label></div>
+                <div class="field-card"><label class="kpi">Generacions<br><input type="number" name="generations" id="generations" value="1" min="1" style="width:70px;"><span class="field-help">Nombre de cicles complets (generar + entrenar models)</span></label></div>
+                <div class="field-card"><label class="kpi">Models / generació<br><input type="number" name="models_per_generation" id="models_per_generation" value="1" min="1" style="width:70px;"><span class="field-help">Nombre de models nous que es generaran per cada generació</span></label></div>
+                <div class="field-card"><label class="kpi">Champion scope<br><select name="champion_scope" id="champion_scope"><option value="run">run</option><option value="global">global</option></select><span class="field-help">Defineix si el champion es decideix dins del run o globalment</span></label></div>
+                <div class="field-card"><label class="kpi">Auto-feed<br><select name="auto_feed" id="auto_feed"><option value="1">on</option><option value="0">off</option></select><span class="field-help">Permet que el sistema generi nous models automàticament</span></label></div>
+                <div class="field-card"><label class="kpi">Resume<br><select name="resume_enabled" id="resume_enabled"><option value="1">on</option><option value="0">off</option></select><span class="field-help">Permet reprendre entrenaments interromputs des de checkpoint</span></label></div>
+                <div class="field-card"><label class="kpi">Seed inicial<br><select name="bootstrap_seed_model_if_empty" id="bootstrap_seed_model_if_empty"><option value="0">off</option><option value="1">on</option></select><span class="field-help">Crea un model inicial si no n’hi ha cap disponible</span></label></div>
+                <div class="field-card"><label class="kpi">Auto phase0<br><select name="auto_process_proposals_phase0" id="auto_process_proposals_phase0"><option value="1">on</option><option value="0">off</option></select><span class="field-help">Processa automàticament les propostes inicials abans d’entrenar</span></label></div>
+                <div class="field-card"><label class="kpi">LLM interval<br><input type="number" name="llm_min_interval_seconds" id="llm_min_interval_seconds" value="20" min="0" style="width:70px;"><span class="field-help">Temps mínim entre crides al LLM per evitar saturació</span></label></div>
+            </div>
+            <div class="plan-summary" id="execution-plan-summary">
+                <div><strong id="plan-total-models">1 generació × 1 model = 1 model total</strong></div>
+                <div class="kpi" id="plan-profile-line">Perfil small_test · Execució ràpida per validar pipeline i control operatiu.</div>
+                <div class="kpi" id="plan-type-line">Tipus smoke_run · Prova ràpida end-to-end.</div>
+                <div class="kpi" id="plan-options-line">Resume activat · champion run</div>
+                <div class="kpi" id="plan-duration-line">Estimació de durada: 4 min</div>
+            </div>
+            <div class="inline-actions"><button type="submit">Crear execució</button></div>
         </form>
         <div class="kpi">Què fa: el servidor crea el pla, el worker de Colab el reclama i executa el cicle complet sense tocar scripts manuals.</div>
-        <div class="kpi">Generacions = nombre de cicles complets. Models/generació = quants candidats nous intenta generar l'LLM a cada cicle.</div>
-        <div class="kpi">Seed inicial: si està on i el sistema no té proposals, Colab crea un model base automàtic. Per proves netes i recompte exacte, millor off.</div>
-        <div class="kpi">small_test: Execució ràpida amb dataset petit per validar pipeline. Durada típica: 4-8 min per model.</div>
-        <div class="kpi">default: Configuració equilibrada per iterar amb més qualitat. Durada típica: 8-15 min per model.</div>
-        <div class="kpi">real_large: Dataset gran i cost alt; pensat per runs llargs i més fiables. Durada típica: 18-30 min per model.</div>
         <div class="kpi">Auto-feed: si la cua queda buida, el supervisor pot generar feina nova. Resume: intenta reprendre entrenaments amb checkpoints compatibles.</div>
+    </div>
+
+    <div class="section-header">
+        <h2>Execucions actives i recents</h2>
+        <span class="kpi">Veu alertes, resultat final i repeteix configuracions útils.</span>
+    </div>
+    <div class="panel">
         <table>
             <thead>
                 <tr>
@@ -892,11 +994,15 @@ try {
                 <?php $championEventType = (string) ($requestResultSummary['latest_event_type'] ?? ''); ?>
                 <?php $estimatedMinutes = estimateExecutionDurationMinutes($requestConfig); ?>
                 <?php $elapsedLabel = formatDurationShort($request['elapsed_seconds'] ?? null); ?>
+                <?php $alertBadges = requestAlertBadges($request); ?>
+                <?php $statusValue = (string) ($request['status'] ?? ''); ?>
+                <?php $statusClass = 'status-pill status-pill-' . htmlspecialchars($statusValue, ENT_QUOTES, 'UTF-8'); ?>
+                <?php $artifactAvailability = artifactAvailabilityLabel($requestResultSummary); ?>
                 <tr>
                     <td class="mono"><?php echo htmlspecialchars($reqId, ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($request['type'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
-                    <td><?php echo htmlspecialchars((string) ($request['type_description'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
-                    <td><?php echo htmlspecialchars((string) ($request['status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string) ($request['type_description'] ?? ''), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi"><?php echo htmlspecialchars(requestTypeExplanation((string) ($request['type'] ?? '')), ENT_QUOTES, 'UTF-8'); ?></span></td>
+                    <td><span class="<?php echo $statusClass; ?>"><?php echo htmlspecialchars($statusValue, ENT_QUOTES, 'UTF-8'); ?></span><?php if (!empty($alertBadges)): ?><div class="badge-row" style="margin-top:6px;"><?php foreach ($alertBadges as $badge): ?><span class="badge <?php echo htmlspecialchars((string) ($badge['class'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars((string) ($badge['label'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span><?php endforeach; ?></div><?php endif; ?></td>
                     <td><?php echo htmlspecialchars((string) (($requestConfig['generations'] ?? 1) . ' gen · ' . ($requestConfig['models_per_generation'] ?? 1) . ' models/gen'), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi"><?php echo htmlspecialchars(executionProfileExplanation((string) ($requestConfig['profile'] ?? 'small_test')), ENT_QUOTES, 'UTF-8'); ?></span></td>
                     <td><details><summary>Veure</summary><pre style="font-size:11px; margin:0; background:#1e293b; padding:4px; overflow-x:auto;"><?php echo htmlspecialchars(json_encode($requestConfig, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), ENT_QUOTES, 'UTF-8'); ?></pre></details></td>
                     <td><?php echo htmlspecialchars((string) (($requestProgress['generations_completed'] ?? 0) . '/' . ($requestProgress['generations_total'] ?? 0)), ENT_QUOTES, 'UTF-8'); ?> · models=<?php echo htmlspecialchars((string) ($requestProgress['models_generated'] ?? 0), ENT_QUOTES, 'UTF-8'); ?>/<?php echo htmlspecialchars((string) ($requestProgress['models_trained'] ?? 0), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi"><?php echo htmlspecialchars((string) ($requestProgress['progress_percent'] ?? 0), ENT_QUOTES, 'UTF-8'); ?>% completat</span></td>
@@ -907,9 +1013,34 @@ try {
                     <td><?php echo htmlspecialchars((string) ($request['heartbeat_at'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($request['attempts'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars(executionReferenceSummary($requestResultSummary), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi"><?php echo htmlspecialchars((string) (($requestResultSummary['reference_context']['reference_models_count'] ?? 0) . ' refs'), ENT_QUOTES, 'UTF-8'); ?></span></td>
-                    <td><?php echo htmlspecialchars(championOutcomeExplanation($championEventType), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi mono"><?php echo htmlspecialchars((string) ($requestResultSummary['proposal_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span><details><summary>Veure</summary><pre style="font-size:11px; margin:0; background:#1e293b; padding:4px; overflow-x:auto;"><?php echo htmlspecialchars(json_encode($requestResultSummary, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), ENT_QUOTES, 'UTF-8'); ?></pre></details></td>
+                    <td>
+                        <?php if (in_array($statusValue, ['completed', 'failed', 'cancelled'], true)): ?>
+                            <div class="summary-card stack">
+                                <div class="summary-grid">
+                                    <div><div class="summary-label">Estat final</div><div><?php echo htmlspecialchars($statusValue, ENT_QUOTES, 'UTF-8'); ?></div></div>
+                                    <div><div class="summary-label">Champion</div><div><?php echo htmlspecialchars(championOutcomeExplanation($championEventType), ENT_QUOTES, 'UTF-8'); ?></div></div>
+                                    <div><div class="summary-label">Models</div><div><?php echo htmlspecialchars((string) (($requestProgress['models_generated'] ?? 0) . ' generats · ' . ($requestProgress['models_trained'] ?? 0) . ' entrenats'), ENT_QUOTES, 'UTF-8'); ?></div></div>
+                                    <div><div class="summary-label">Artifact final</div><div><?php echo htmlspecialchars($artifactAvailability, ENT_QUOTES, 'UTF-8'); ?></div></div>
+                                </div>
+                                <div class="kpi">run_ids: <span class="mono"><?php echo htmlspecialchars(implode(', ', array_map('strval', $requestRunIds)), ENT_QUOTES, 'UTF-8'); ?></span></div>
+                                <div class="kpi">proposal final: <span class="mono"><?php echo htmlspecialchars((string) ($requestResultSummary['proposal_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span></div>
+                            </div>
+                        <?php else: ?>
+                            <?php echo htmlspecialchars(championOutcomeExplanation($championEventType), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi mono"><?php echo htmlspecialchars((string) ($requestResultSummary['proposal_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span>
+                        <?php endif; ?>
+                        <details><summary>Veure</summary><pre style="font-size:11px; margin:0; background:#1e293b; padding:4px; overflow-x:auto;"><?php echo htmlspecialchars(json_encode($requestResultSummary, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), ENT_QUOTES, 'UTF-8'); ?></pre></details>
+                    </td>
                     <td><a href="./monitor.php?execution_autopsy_id=<?php echo rawurlencode($reqId); ?>" target="_blank" rel="noreferrer">Veure</a></td>
                     <td>
+                        <div class="inline-actions">
+                        <form method="post" action="./monitor.php">
+                            <?php echo hiddenConfigInputs((string) ($request['type'] ?? ''), $requestConfig); ?>
+                            <button type="submit">Re-executar</button>
+                        </form>
+                        <form method="post" action="./monitor.php">
+                            <?php echo hiddenConfigInputs((string) ($request['type'] ?? ''), $requestConfig); ?>
+                            <button type="submit">Executar de nou amb mateix config</button>
+                        </form>
                         <?php if (in_array((string) ($request['status'] ?? ''), ['pending', 'claimed', 'running'], true)): ?>
                             <form method="post" action="./monitor.php">
                                 <input type="hidden" name="action" value="execution_request_cancel">
@@ -917,6 +1048,7 @@ try {
                                 <button type="submit">Cancel·lar</button>
                             </form>
                         <?php endif; ?>
+                        </div>
                     </td>
                 </tr>
             <?php endforeach; ?>
@@ -1345,5 +1477,68 @@ try {
             <?php endforeach; ?>
         </tbody>
     </table>
+    <script>
+        (function () {
+            const form = document.getElementById('execution-create-form');
+            if (!form) return;
+
+            const requestTypeHelp = document.getElementById('request_type_help');
+            const profileHelp = document.getElementById('profile_help');
+            const totalModels = document.getElementById('plan-total-models');
+            const profileLine = document.getElementById('plan-profile-line');
+            const typeLine = document.getElementById('plan-type-line');
+            const optionsLine = document.getElementById('plan-options-line');
+            const durationLine = document.getElementById('plan-duration-line');
+
+            const requestTypeDescriptions = {
+                smoke_run: 'Prova ràpida end-to-end.',
+                micro_training: 'Entrenament curt real.',
+                integration_matrix: 'Múltiples runs per validar consistència.',
+                resume_training: 'Reprèn entrenaments interromputs.',
+                cleanup: 'Neteja estat inconsistent.'
+            };
+            const profileDescriptions = {
+                small_test: 'Execució ràpida per validar pipeline i control operatiu.',
+                default: 'Configuració equilibrada entre temps i qualitat.',
+                real_large: 'Dataset gran i execució costosa; orientat a qualitat real.'
+            };
+            const perModelMinutes = {
+                small_test: 4,
+                default: 8,
+                real_large: 18
+            };
+
+            function asPositiveInt(value, fallback) {
+                const parsed = parseInt(value, 10);
+                return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+            }
+
+            function updatePlanSummary() {
+                const requestType = form.elements['request_type'].value;
+                const profile = form.elements['profile'].value;
+                const generations = asPositiveInt(form.elements['generations'].value, 1);
+                const modelsPerGeneration = asPositiveInt(form.elements['models_per_generation'].value, 1);
+                const total = generations * modelsPerGeneration;
+                const estimatedMinutes = Math.max(2, total * (perModelMinutes[profile] || 4));
+                const resumeEnabled = form.elements['resume_enabled'].value === '1' ? 'Resume activat' : 'Resume desactivat';
+                const championScope = 'champion ' + form.elements['champion_scope'].value;
+
+                requestTypeHelp.textContent = requestTypeDescriptions[requestType] || 'Tipus d’execució personalitzat.';
+                profileHelp.textContent = profileDescriptions[profile] || '';
+                totalModels.textContent = generations + ' generacions × ' + modelsPerGeneration + ' models = ' + total + ' models totals';
+                profileLine.textContent = 'Perfil ' + profile + ' · ' + (profileDescriptions[profile] || '');
+                typeLine.textContent = 'Tipus ' + requestType + ' · ' + (requestTypeDescriptions[requestType] || '');
+                optionsLine.textContent = resumeEnabled + ' · ' + championScope;
+                durationLine.textContent = 'Estimació de durada: ' + estimatedMinutes + ' min';
+            }
+
+            form.querySelectorAll('select, input').forEach((element) => {
+                element.addEventListener('change', updatePlanSummary);
+                element.addEventListener('input', updatePlanSummary);
+            });
+
+            updatePlanSummary();
+        })();
+    </script>
 </body>
 </html>
