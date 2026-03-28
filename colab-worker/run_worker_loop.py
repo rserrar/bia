@@ -159,8 +159,9 @@ def _run_command_with_progress(
             _merge_summary(progress_update)
 
     return_code = proc.wait()
-    output_tail = "".join(collected_lines)[-12000:]
-    final_json = _extract_last_json_block(output_tail)
+    raw_output = "".join(collected_lines)
+    output_tail = _compact_output_tail(raw_output)
+    final_json = _extract_last_json_block(raw_output[-12000:])
     if final_json:
         _merge_summary(final_json)
     return return_code, output_tail, summary
@@ -176,6 +177,34 @@ def _extract_last_json_block(text: str) -> dict[str, object]:
         except Exception:
             continue
     return {}
+
+
+def _compact_output_tail(text: str, max_tail_lines: int = 12, max_interesting_lines: int = 12) -> str:
+    lines = [line.rstrip() for line in text.splitlines() if line.strip() != ""]
+    if not lines:
+        return ""
+    noise_markers = (
+        "cuda",
+        "tensorflow/core/platform/cpu_feature_guard",
+        "computation_placer",
+        "could not find cuda drivers",
+        "attempting to register factory",
+        '"progress_event": true',
+    )
+    interesting: list[str] = []
+    tail: list[str] = []
+    for line in lines:
+        lowered = line.lower()
+        if any(marker in lowered for marker in noise_markers):
+            continue
+        if any(marker in lowered for marker in ("error", "fail", "checkpoint", "trainer", "proposal", "run_id=", '"ok"', '"run_id"', "champion")):
+            interesting.append(line)
+        tail.append(line)
+    selected: list[str] = []
+    for line in interesting[-max_interesting_lines:] + tail[-max_tail_lines:]:
+        if line not in selected:
+            selected.append(line)
+    return "\n".join(selected)[-5000:]
 
 
 def _as_positive_int(value: object, default: int = 1) -> int:

@@ -204,10 +204,18 @@ final class ApiService
         foreach ($runIds as $runId) {
             $runs[] = $this->buildExecutionRunAutopsy($runId, $timelineLimit);
         }
+        $status = (string) ($request['status'] ?? '');
+        $effectiveStage = in_array($status, ['completed', 'failed', 'cancelled'], true)
+            ? $status
+            : (string) ($request['current_stage'] ?? '');
+        $effectiveStageLabel = in_array($status, ['completed', 'failed', 'cancelled'], true)
+            ? $this->executionFinalStatusLabel($status)
+            : (string) ($request['current_stage_label'] ?? '');
+        $outcome = $this->deriveExecutionOutcome($request, $runs, $resultSummary);
 
         return [
             'request_id' => (string) ($request['request_id'] ?? ''),
-            'status' => (string) ($request['status'] ?? ''),
+            'status' => $status,
             'type' => (string) ($request['type'] ?? ''),
             'type_description' => (string) ($request['type_description'] ?? ''),
             'config' => is_array($request['config'] ?? null) ? $request['config'] : [],
@@ -226,21 +234,10 @@ final class ApiService
             'progress' => is_array($request['progress'] ?? null) ? $request['progress'] : [],
             'run_ids' => $runIds,
             'current_run_id' => (string) ($request['current_run_id'] ?? ''),
-            'current_stage' => (string) ($request['current_stage'] ?? ''),
-            'current_stage_label' => (string) ($request['current_stage_label'] ?? ''),
+            'current_stage' => $effectiveStage,
+            'current_stage_label' => $effectiveStageLabel,
             'error_summary' => $request['error_summary'] ?? null,
-            'outcome' => [
-                'final_status' => (string) ($request['status'] ?? ''),
-                'latest_event_type' => (string) ($resultSummary['latest_event_type'] ?? ''),
-                'latest_artifact_type' => (string) ($resultSummary['latest_artifact_type'] ?? ''),
-                'proposal_id' => (string) ($resultSummary['proposal_id'] ?? ''),
-                'proposal_status' => (string) ($resultSummary['proposal_status'] ?? ''),
-                'trained_model_uri' => $resultSummary['trained_model_uri'] ?? null,
-                'training_kpis_keys' => array_values(array_filter(
-                    array_map(static fn($key): string => is_string($key) ? $key : '', (array) ($resultSummary['training_kpis_keys'] ?? [])),
-                    static fn(string $key): bool => $key !== ''
-                )),
-            ],
+            'outcome' => $outcome,
             'lifecycle' => $lifecycle,
             'log_excerpt' => $this->buildExecutionLogExcerpt((string) ($resultSummary['output_tail'] ?? '')),
             'runs' => $runs,
@@ -1429,6 +1426,13 @@ final class ApiService
         if ($generationsTotal > 0) {
             $progressPercent = min(100.0, round((($generationsCompleted + ($modelsGenerated > $modelsTrained ? 0.35 : 0.0)) / $generationsTotal) * 100.0, 1));
         }
+        $requestStatus = (string) ($request['status'] ?? '');
+        $currentStage = (string) ($resultSummary['stage'] ?? '');
+        $currentStageLabel = (string) ($resultSummary['stage_label'] ?? '');
+        if (in_array($requestStatus, ['completed', 'failed', 'cancelled'], true)) {
+            $currentStage = $requestStatus;
+            $currentStageLabel = $this->executionFinalStatusLabel($requestStatus);
+        }
         return array_merge($request, [
             'config' => $config,
             'type_description' => $this->executionTypeDescription($type),
@@ -1439,8 +1443,8 @@ final class ApiService
                 'models_trained' => $modelsTrained,
                 'progress_percent' => $progressPercent,
             ],
-            'current_stage' => (string) ($resultSummary['stage'] ?? ''),
-            'current_stage_label' => (string) ($resultSummary['stage_label'] ?? ''),
+            'current_stage' => $currentStage,
+            'current_stage_label' => $currentStageLabel,
             'current_run_id' => $currentRunId,
             'run_ids' => $runIds,
             'started_at' => (string) ($request['claimed_at'] ?? ''),
@@ -1532,7 +1536,68 @@ final class ApiService
         ];
     }
 
-    private function buildExecutionLogExcerpt(string $outputTail, int $maxLines = 40): array
+    private function deriveExecutionOutcome(array $request, array $runs, array $resultSummary): array
+    {
+        $proposalId = (string) ($resultSummary['proposal_id'] ?? '');
+        $proposalStatus = (string) ($resultSummary['proposal_status'] ?? '');
+        $trainedModelUri = $resultSummary['trained_model_uri'] ?? null;
+        $trainingKpiKeys = array_values(array_filter(
+            array_map(static fn($key): string => is_string($key) ? $key : '', (array) ($resultSummary['training_kpis_keys'] ?? [])),
+            static fn(string $key): bool => $key !== ''
+        ));
+        $latestEventType = (string) ($resultSummary['latest_event_type'] ?? '');
+        $latestArtifactType = (string) ($resultSummary['latest_artifact_type'] ?? '');
+
+        foreach ($runs as $run) {
+            $runLatestEvent = is_array($run['latest_event'] ?? null) ? $run['latest_event'] : [];
+            $runLatestArtifact = is_array($run['latest_artifact'] ?? null) ? $run['latest_artifact'] : [];
+            if ($latestEventType === '') {
+                $latestEventType = (string) ($runLatestEvent['event_type'] ?? '');
+            }
+            if ($latestArtifactType === '') {
+                $latestArtifactType = (string) ($runLatestArtifact['artifact_type'] ?? '');
+            }
+            foreach ((array) ($run['proposals'] ?? []) as $proposal) {
+                if (!is_array($proposal)) {
+                    continue;
+                }
+                $candidateKpis = is_array($proposal['training_kpis'] ?? null) ? $proposal['training_kpis'] : [];
+                $isPreferred = $proposalId === ''
+                    || (bool) ($proposal['champion_active'] ?? false)
+                    || (string) ($proposal['status'] ?? '') === 'trained';
+                if (!$isPreferred) {
+                    continue;
+                }
+                if ($proposalId === '') {
+                    $proposalId = (string) ($proposal['proposal_id'] ?? '');
+                }
+                if ($proposalStatus === '') {
+                    $proposalStatus = (string) ($proposal['status'] ?? '');
+                }
+                if ($trainedModelUri === null || $trainedModelUri === '') {
+                    $trainedModelUri = $proposal['trained_model_uri'] ?? null;
+                }
+                if (empty($trainingKpiKeys) && !empty($candidateKpis)) {
+                    $trainingKpiKeys = array_keys($candidateKpis);
+                }
+                if ($proposalId !== '' && $proposalStatus !== '' && $trainedModelUri !== null && !empty($trainingKpiKeys)) {
+                    break 2;
+                }
+            }
+        }
+
+        return [
+            'final_status' => (string) ($request['status'] ?? ''),
+            'latest_event_type' => $latestEventType,
+            'latest_artifact_type' => $latestArtifactType,
+            'proposal_id' => $proposalId,
+            'proposal_status' => $proposalStatus,
+            'trained_model_uri' => $trainedModelUri,
+            'training_kpis_keys' => $trainingKpiKeys,
+        ];
+    }
+
+    private function buildExecutionLogExcerpt(string $outputTail, int $maxLines = 12): array
     {
         if (trim($outputTail) === '') {
             return [
@@ -1542,9 +1607,21 @@ final class ApiService
             ];
         }
         $lines = preg_split('/\r\n|\r|\n/', trim($outputTail)) ?: [];
-        $tailLines = array_slice($lines, -$maxLines);
-        $interestingLines = array_values(array_filter(
+        $filteredLines = array_values(array_filter(
             $lines,
+            static function (string $line): bool {
+                $normalized = strtolower($line);
+                return !str_contains($normalized, 'cuda')
+                    && !str_contains($normalized, 'tensorflow/core/platform/cpu_feature_guard')
+                    && !str_contains($normalized, 'computation_placer')
+                    && !str_contains($normalized, 'could not find cuda drivers')
+                    && !str_contains($normalized, 'attempting to register factory')
+                    && !str_contains($normalized, '"progress_event": true');
+            }
+        ));
+        $tailLines = array_slice($filteredLines, -$maxLines);
+        $interestingLines = array_values(array_filter(
+            $filteredLines,
             static function (string $line): bool {
                 $normalized = strtolower($line);
                 return str_contains($normalized, 'error')
@@ -1559,9 +1636,9 @@ final class ApiService
         ));
 
         return [
-            'line_count' => count($lines),
+            'line_count' => count($filteredLines),
             'tail_lines' => array_values($tailLines),
-            'interesting_lines' => array_values(array_slice($interestingLines, -20)),
+            'interesting_lines' => array_values(array_slice($interestingLines, -12)),
         ];
     }
 
