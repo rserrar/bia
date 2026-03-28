@@ -969,11 +969,13 @@ final class ApiService
             'metrics' => count(is_array($before['metrics'] ?? null) ? $before['metrics'] : []),
             'artifacts' => count(is_array($before['artifacts'] ?? null) ? $before['artifacts'] : []),
             'model_proposals' => count(is_array($before['model_proposals'] ?? null) ? $before['model_proposals'] : []),
+            'execution_requests' => count(is_array($before['execution_requests'] ?? null) ? $before['execution_requests'] : []),
         ];
+        $deletedArtifactFiles = $this->deleteDirectoryContents($this->artifactStorageDir());
         $this->store->resetAll();
         return [
             'ok' => true,
-            'deleted' => $counts,
+            'deleted' => array_merge($counts, ['artifact_files' => $deletedArtifactFiles]),
             'reset_at' => $this->nowIso(),
         ];
     }
@@ -1701,5 +1703,34 @@ final class ApiService
             return $leftValue > $rightValue ? 'left' : 'right';
         }
         return $leftValue < $rightValue ? 'left' : 'right';
+    }
+
+    private function deleteDirectoryContents(string $directory): int
+    {
+        if (!is_dir($directory)) {
+            return 0;
+        }
+        $deleted = 0;
+        $items = scandir($directory);
+        if ($items === false) {
+            return 0;
+        }
+        foreach ($items as $item) {
+            if ($item === '.' || $item === '..') {
+                continue;
+            }
+            $path = $directory . DIRECTORY_SEPARATOR . $item;
+            if (is_dir($path)) {
+                $deleted += $this->deleteDirectoryContents($path);
+                if (@rmdir($path)) {
+                    $deleted += 1;
+                }
+                continue;
+            }
+            if (@unlink($path)) {
+                $deleted += 1;
+            }
+        }
+        return $deleted;
     }
 }

@@ -618,7 +618,7 @@ try {
     }
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && (string) ($_POST['action'] ?? '') === 'reset_all_data') {
         $confirm = is_string($_POST['confirm'] ?? null) ? (string) $_POST['confirm'] : '';
-        if ($confirm === 'RESET') {
+        if ($confirm === 'DELETE TEST DATA') {
             $_SESSION['reset_result'] = $service->resetAllData();
         }
         redirectToMonitorHome();
@@ -759,6 +759,7 @@ try {
     <?php 
         $resetResult = is_array($_SESSION['reset_result'] ?? null) ? $_SESSION['reset_result'] : null; unset($_SESSION['reset_result']); 
         $evalResult = is_array($_SESSION['eval_result'] ?? null) ? $_SESSION['eval_result'] : null; unset($_SESSION['eval_result']); 
+        $showResetConfirm = (string) ($_GET['confirm_reset'] ?? '') === '1';
     ?>
     <div class="meta">Actualització automàtica cada 15s · Runs: <?php echo count($runs); ?> · <a href="./monitor.php?logout=1">Sortir</a></div>
     <div class="meta">Selection policy: <span class="mono"><?php echo htmlspecialchars((string) ($championBoard['policy_version'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span> · profile: <span class="mono"><?php echo htmlspecialchars((string) ($championBoard['policy_profile'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span></div>
@@ -768,18 +769,31 @@ try {
             <input type="number" name="threshold" value="0.5" step="0.01" style="width: 70px;">
             <button type="submit">Avaluar KPIs (promoure models)</button>
         </form>
-        <form method="post" action="./monitor.php">
-            <input type="hidden" name="action" value="reset_all_data">
-            <input type="hidden" name="confirm" value="RESET">
-            <button type="submit" class="danger" onclick="return confirm('Vols esborrar totes les dades de prova?');">Reset dades prova</button>
+        <form method="get" action="./monitor.php">
+            <input type="hidden" name="confirm_reset" value="1">
+            <button type="submit" class="danger">Reset dades prova</button>
         </form>
         <?php if ($resetResult !== null): ?>
-            <span class="notice">Reset fet · Runs: <?php echo (int) ($resetResult['deleted']['runs'] ?? 0); ?> · Events: <?php echo (int) ($resetResult['deleted']['events'] ?? 0); ?> · Metrics: <?php echo (int) ($resetResult['deleted']['metrics'] ?? 0); ?> · Artifacts: <?php echo (int) ($resetResult['deleted']['artifacts'] ?? 0); ?> · Proposals: <?php echo (int) ($resetResult['deleted']['model_proposals'] ?? 0); ?></span>
+            <span class="notice">Reset fet · Runs: <?php echo (int) ($resetResult['deleted']['runs'] ?? 0); ?> · Events: <?php echo (int) ($resetResult['deleted']['events'] ?? 0); ?> · Metrics: <?php echo (int) ($resetResult['deleted']['metrics'] ?? 0); ?> · Artifacts: <?php echo (int) ($resetResult['deleted']['artifacts'] ?? 0); ?> · Proposals: <?php echo (int) ($resetResult['deleted']['model_proposals'] ?? 0); ?> · Exec requests: <?php echo (int) ($resetResult['deleted']['execution_requests'] ?? 0); ?> · Fitxers artifact: <?php echo (int) ($resetResult['deleted']['artifact_files'] ?? 0); ?></span>
         <?php endif; ?>
         <?php if ($evalResult !== null): ?>
             <span class="notice">Models avaluats (KPIs): <?php echo (int) ($evalResult['evaluated_count'] ?? 0); ?></span>
         <?php endif; ?>
     </div>
+
+    <?php if ($showResetConfirm): ?>
+    <div class="panel danger" style="margin-top:0;">
+        <h2 style="margin-top:0; color:#fecaca;">Confirmar reset de dades de prova</h2>
+        <div class="kpi">Aquesta acció esborra totes les dades guardades al servidor per fer proves netes: runs, events, metrics, artifacts, proposals, execution requests i fitxers d'artifacts del servidor.</div>
+        <div class="kpi" style="margin-top:8px;">Per confirmar, escriu exactament <span class="mono">DELETE TEST DATA</span>.</div>
+        <form method="post" action="./monitor.php" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:12px;">
+            <input type="hidden" name="action" value="reset_all_data">
+            <input type="text" name="confirm" placeholder="DELETE TEST DATA" class="mono" style="min-width:220px; background:#0b1220; color:#e2e8f0; border:1px solid #7f1d1d; padding:6px 8px; border-radius:4px;">
+            <button type="submit" class="danger">Confirmar esborrat</button>
+            <a href="./monitor.php">Cancel·lar</a>
+        </form>
+    </div>
+    <?php endif; ?>
 
     <h2>Control Panel</h2>
     <div class="panel">

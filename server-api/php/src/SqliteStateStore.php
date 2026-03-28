@@ -334,6 +334,7 @@ final class SqliteStateStore
     {
         $this->pdo->beginTransaction();
         try {
+            $this->pdo->exec('DELETE FROM execution_requests');
             $this->pdo->exec('DELETE FROM events');
             $this->pdo->exec('DELETE FROM metrics');
             $this->pdo->exec('DELETE FROM artifacts');
