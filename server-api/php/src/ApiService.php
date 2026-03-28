@@ -212,6 +212,7 @@ final class ApiService
             ? $this->executionFinalStatusLabel($status)
             : (string) ($request['current_stage_label'] ?? '');
         $outcome = $this->deriveExecutionOutcome($request, $runs, $resultSummary);
+        $referenceContext = $this->deriveExecutionReferenceContext($request, $runs, $resultSummary);
 
         return [
             'request_id' => (string) ($request['request_id'] ?? ''),
@@ -238,6 +239,7 @@ final class ApiService
             'current_stage_label' => $effectiveStageLabel,
             'error_summary' => $request['error_summary'] ?? null,
             'outcome' => $outcome,
+            'reference_context' => $referenceContext,
             'lifecycle' => $lifecycle,
             'log_excerpt' => $this->buildExecutionLogExcerpt((string) ($resultSummary['output_tail'] ?? '')),
             'runs' => $runs,
@@ -1503,6 +1505,7 @@ final class ApiService
     {
         $summary = $this->getSummary($runId);
         $timelinePayload = $this->getRunTimeline($runId, $timelineLimit);
+        $referencesPayload = $this->getRunReferences($runId, 5);
         $timeline = is_array($timelinePayload['timeline'] ?? null) ? $timelinePayload['timeline'] : [];
         $proposals = array_values(array_filter(
             $this->listModelProposals(1000),
@@ -1518,6 +1521,7 @@ final class ApiService
             'proposals_by_status' => is_array($summary['proposals_by_status'] ?? null) ? $summary['proposals_by_status'] : [],
             'latest_event' => $summary['latest_event'] ?? null,
             'latest_artifact' => $summary['latest_artifact'] ?? null,
+            'references' => $referencesPayload,
             'timeline' => $timeline,
             'proposals' => array_map(fn(array $proposal): array => $this->buildExecutionProposalSummary($proposal), $proposals),
             'artifacts' => array_map(fn(array $artifact): array => $this->normalizeArtifactView($artifact), $artifacts),
@@ -1595,11 +1599,49 @@ final class ApiService
             'final_status' => (string) ($request['status'] ?? ''),
             'latest_event_type' => $latestEventType,
             'latest_artifact_type' => $latestArtifactType,
+            'champion_decision' => $this->championOutcomeLabel($latestEventType),
             'proposal_id' => $proposalId,
             'proposal_status' => $proposalStatus,
             'trained_model_uri' => $trainedModelUri,
             'training_kpis_keys' => $trainingKpiKeys,
         ];
+    }
+
+    private function deriveExecutionReferenceContext(array $request, array $runs, array $resultSummary): array
+    {
+        $context = is_array($resultSummary['reference_context'] ?? null) ? $resultSummary['reference_context'] : [];
+        $references = array_values(array_filter(
+            is_array($context['references'] ?? null) ? $context['references'] : [],
+            static fn($reference): bool => is_array($reference)
+        ));
+        if (empty($references) && !empty($runs)) {
+            $firstRun = $runs[0];
+            $referencesPayload = is_array($firstRun['references'] ?? null) ? $firstRun['references'] : [];
+            $references = array_values(array_filter(
+                is_array($referencesPayload['references'] ?? null) ? $referencesPayload['references'] : [],
+                static fn($reference): bool => is_array($reference)
+            ));
+            $context = array_merge($referencesPayload, $context);
+        }
+        $primaryReference = is_array($references[0] ?? null) ? $references[0] : [];
+        return [
+            'reference_models_count' => (int) ($context['reference_models_count'] ?? count($references)),
+            'reference_policy_version' => (string) ($context['reference_policy_version'] ?? ''),
+            'fallback_used' => (bool) ($context['fallback_used'] ?? false),
+            'primary_reference_proposal_id' => (string) ($primaryReference['proposal_id'] ?? ''),
+            'primary_reference_reason' => (string) ($primaryReference['selection_reason'] ?? ''),
+            'references' => $references,
+        ];
+    }
+
+    private function championOutcomeLabel(string $eventType): string
+    {
+        return match ($eventType) {
+            'champion_selected' => 'champion_selected',
+            'champion_kept' => 'champion_kept',
+            'champion_selection_skipped' => 'champion_selection_skipped',
+            default => $eventType,
+        };
     }
 
     private function buildExecutionLogExcerpt(string $outputTail, int $maxLines = 12): array

@@ -86,6 +86,10 @@ Els camps rellevants per UI avui son:
 - `training_interrupted_at`
 - `resume_history`
 
+També pot aparèixer dins `result_summary` d'una execution:
+
+- `reference_context`
+
 ## Server persistence model
 
 El servidor persisteix aquestes col.leccions:
@@ -131,6 +135,9 @@ Metadata d'artifact exposada a frontend:
 - `GET /runs/{id}/summary`
 - `GET /runs/{id}/timeline`
 - `GET /runs/{id}/references`
+- `GET /execution-requests`
+- `GET /execution-requests/{id}`
+- `GET /execution-requests/{id}/autopsy`
 - `GET /proposals`
 - `GET /champion/run/{id}`
 - `GET /champion/global`
@@ -145,6 +152,36 @@ Upload intern actual:
 - `POST /runs/{run_id}/artifacts/upload`
 
 Aquest endpoint permet persistir una copia del model entrenat al servidor i evitar dependencia del path local de Colab.
+
+## Execution UI contract
+
+Per control operatiu, les execucions exposen camps pensats per monitor/UI:
+
+- `progress.generations_total`
+- `progress.generations_completed`
+- `progress.models_generated`
+- `progress.models_trained`
+- `current_stage`
+- `current_stage_label`
+- `run_ids`
+- `current_run_id`
+- `elapsed_seconds`
+
+Per autopsia/resum final:
+
+- `outcome.final_status`
+- `outcome.latest_event_type`
+- `outcome.latest_artifact_type`
+- `outcome.champion_decision`
+- `outcome.proposal_id`
+- `outcome.proposal_status`
+- `outcome.trained_model_uri`
+- `outcome.training_kpis_keys`
+- `reference_context.reference_models_count`
+- `reference_context.primary_reference_proposal_id`
+- `reference_context.primary_reference_reason`
+
+Quan una execucio reutilitza un champion previ com a context de prompt, la UI no ha d'inferir-ho de logs: ho ha de poder llegir de `reference_context` o de `GET /runs/{id}/references`.
 
 Checkpoints:
 

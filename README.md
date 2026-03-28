@@ -8,7 +8,7 @@ La V2 es construeix amb 3 components separats:
 
 - Colab Worker: execució automàtica del cicle d'evolució de models
 - Server API: control d'estat, persistència, seguretat i coordinació
-- Frontend Local (Windows): monitoratge i visualització de resultats
+- Frontend Local (Windows): monitoratge bàsic per polling; el monitor web PHP és el control panel operatiu principal
 
 ## Regles de treball
 
@@ -49,7 +49,7 @@ Punt d'entrada recomanat (unificat):
 - API PHP base implementada i funcional sota `server-api/php/`
 - Worker Colab base implementat sota `colab-worker/src/`
 - Monitor local per polling implementat sota `local-frontend/src/`
-- Contracte d'API alineat a `shared/schemas/api_contract.json`
+- Control plane server-driven operatiu amb `execution_requests`, progrés viu i autòpsia d'execució
 - Trial LLM validat amb OpenAI (`gpt-5.4`) i creació de propostes per generació
 - Reparació automàtica de candidats LLM activable amb `V2_LLM_REPAIR_ON_VALIDATION_ERROR=true`
 - Verificació de compilació de propostes per run amb `ops/scripts/run_generated_proposals_compile_check.py`
@@ -78,6 +78,33 @@ Punt d'entrada recomanat (unificat):
 - Smoke E2E final: `ops/scripts/run_e2e_final_smoke.py`
 - Supervisor trainer: `ops/scripts/run_trainer_supervisor.py`
 - Runtime watcher: `ops/scripts/watch_runtime_status.py`
+
+## Control plane actual
+
+El sistema actual ja funciona en mode server-driven:
+
+- el servidor crea una `execution_request`
+- Colab reclama la request i executa el loop real
+- el progrés es reporta via `heartbeat` i `result_summary`
+- el monitor web permet crear execucions, veure el progrés i consultar una autòpsia final compacta
+
+Paràmetres clau d'execució avui:
+
+- `generations`
+- `models_per_generation`
+- `resume_enabled`
+- `bootstrap_seed_model_if_empty`
+- `auto_process_proposals_phase0`
+- `llm_min_interval_seconds`
+
+Regla operativa important:
+
+- la configuració canònica d'una execució és la del servidor; Colab ha de seguir-la i no substituir-la per defaults locals del notebook
+
+Referències i champion:
+
+- si hi ha un champion entrenat al servidor, el worker el pot reutilitzar com a model de referència per al prompt LLM
+- el monitor i l'autòpsia distingeixen entre `champion_selected` i `champion_kept`
 
 ## Layout de dades
 

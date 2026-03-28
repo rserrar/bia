@@ -106,6 +106,31 @@ function executionProfileExplanation(string $profile): string
     };
 }
 
+function championOutcomeExplanation(string $eventType): string
+{
+    return match ($eventType) {
+        'champion_selected' => 'Nou champion seleccionat',
+        'champion_kept' => 'S’ha mantingut el champion anterior',
+        'champion_selection_skipped' => 'Selecció de champion omesa',
+        default => $eventType,
+    };
+}
+
+function executionReferenceSummary(array $resultSummary): string
+{
+    $referenceContext = is_array($resultSummary['reference_context'] ?? null) ? $resultSummary['reference_context'] : [];
+    $primaryReference = is_array(($referenceContext['references'] ?? [])[0] ?? null) ? $referenceContext['references'][0] : [];
+    $referenceId = (string) ($referenceContext['primary_reference_proposal_id'] ?? $primaryReference['proposal_id'] ?? '');
+    if ($referenceId === '') {
+        return 'sense referència visible';
+    }
+    $reason = (string) ($referenceContext['primary_reference_reason'] ?? $primaryReference['selection_reason'] ?? '');
+    if ($reason === '') {
+        return $referenceId;
+    }
+    return $referenceId . ' · ' . $reason;
+}
+
 function monitorCredentials(): array
 {
     return [
@@ -850,6 +875,7 @@ try {
                     <th>Worker</th>
                     <th>Heartbeat</th>
                     <th>Attempts</th>
+                    <th>Reference</th>
                     <th>Result</th>
                     <th>Autòpsia</th>
                     <th>Acció</th>
@@ -862,6 +888,8 @@ try {
                 <?php $requestConfig = is_array($request['config'] ?? null) ? $request['config'] : []; ?>
                 <?php $requestProgress = is_array($request['progress'] ?? null) ? $request['progress'] : []; ?>
                 <?php $requestRunIds = is_array($request['run_ids'] ?? null) ? $request['run_ids'] : []; ?>
+                <?php $requestResultSummary = is_array($request['result_summary'] ?? null) ? $request['result_summary'] : []; ?>
+                <?php $championEventType = (string) ($requestResultSummary['latest_event_type'] ?? ''); ?>
                 <?php $estimatedMinutes = estimateExecutionDurationMinutes($requestConfig); ?>
                 <?php $elapsedLabel = formatDurationShort($request['elapsed_seconds'] ?? null); ?>
                 <tr>
@@ -873,12 +901,13 @@ try {
                     <td><details><summary>Veure</summary><pre style="font-size:11px; margin:0; background:#1e293b; padding:4px; overflow-x:auto;"><?php echo htmlspecialchars(json_encode($requestConfig, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), ENT_QUOTES, 'UTF-8'); ?></pre></details></td>
                     <td><?php echo htmlspecialchars((string) (($requestProgress['generations_completed'] ?? 0) . '/' . ($requestProgress['generations_total'] ?? 0)), ENT_QUOTES, 'UTF-8'); ?> · models=<?php echo htmlspecialchars((string) ($requestProgress['models_generated'] ?? 0), ENT_QUOTES, 'UTF-8'); ?>/<?php echo htmlspecialchars((string) ($requestProgress['models_trained'] ?? 0), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi"><?php echo htmlspecialchars((string) ($requestProgress['progress_percent'] ?? 0), ENT_QUOTES, 'UTF-8'); ?>% completat</span></td>
                     <td><?php echo htmlspecialchars((string) ($request['current_run_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi mono"><?php echo htmlspecialchars(implode(', ', array_slice(array_map('strval', $requestRunIds), 0, 3)), ENT_QUOTES, 'UTF-8'); ?></span></td>
-                    <td><?php echo htmlspecialchars((string) (($request['current_stage_label'] ?? '') ?: ($request['current_stage'] ?? '')), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi"><?php echo htmlspecialchars((string) (($request['result_summary']['latest_event_type'] ?? '') ?: ($request['result_summary']['latest_artifact_type'] ?? '')), ENT_QUOTES, 'UTF-8'); ?></span></td>
+                    <td><?php echo htmlspecialchars((string) (($request['current_stage_label'] ?? '') ?: ($request['current_stage'] ?? '')), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi"><?php echo htmlspecialchars((string) (($requestResultSummary['latest_event_type'] ?? '') ?: ($requestResultSummary['latest_artifact_type'] ?? '')), ENT_QUOTES, 'UTF-8'); ?></span></td>
                     <td>estimació <?php echo htmlspecialchars((string) $estimatedMinutes, ENT_QUOTES, 'UTF-8'); ?> min<br><span class="kpi">elapsed <?php echo htmlspecialchars($elapsedLabel, ENT_QUOTES, 'UTF-8'); ?></span></td>
                     <td><?php echo htmlspecialchars((string) ($request['claimed_by_worker'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($request['heartbeat_at'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                     <td><?php echo htmlspecialchars((string) ($request['attempts'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
-                    <td><details><summary>Veure</summary><pre style="font-size:11px; margin:0; background:#1e293b; padding:4px; overflow-x:auto;"><?php echo htmlspecialchars(json_encode($request['result_summary'] ?? [], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), ENT_QUOTES, 'UTF-8'); ?></pre></details></td>
+                    <td><?php echo htmlspecialchars(executionReferenceSummary($requestResultSummary), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi"><?php echo htmlspecialchars((string) (($requestResultSummary['reference_context']['reference_models_count'] ?? 0) . ' refs'), ENT_QUOTES, 'UTF-8'); ?></span></td>
+                    <td><?php echo htmlspecialchars(championOutcomeExplanation($championEventType), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi mono"><?php echo htmlspecialchars((string) ($requestResultSummary['proposal_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span><details><summary>Veure</summary><pre style="font-size:11px; margin:0; background:#1e293b; padding:4px; overflow-x:auto;"><?php echo htmlspecialchars(json_encode($requestResultSummary, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), ENT_QUOTES, 'UTF-8'); ?></pre></details></td>
                     <td><a href="./monitor.php?execution_autopsy_id=<?php echo rawurlencode($reqId); ?>" target="_blank" rel="noreferrer">Veure</a></td>
                     <td>
                         <?php if (in_array((string) ($request['status'] ?? ''), ['pending', 'claimed', 'running'], true)): ?>

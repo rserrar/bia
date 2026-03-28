@@ -90,6 +90,7 @@ def _poll_until_trained(
     last_seen: dict = {}
     while True:
         run_payload, _ = _request_json("GET", api_base_url, f"/runs/{run_id}", token)
+        references_payload, _ = _request_json("GET", api_base_url, f"/runs/{run_id}/references?limit=5", token)
         proposals_payload, _ = _request_json("GET", api_base_url, "/model-proposals?limit=400", token)
         proposals = [
             p for p in proposals_payload.get("model_proposals", [])
@@ -142,6 +143,11 @@ def _poll_until_trained(
             "latest_event_type": latest_event.get("event_type"),
             "latest_event_label": latest_event.get("label"),
             "latest_artifact_type": latest_artifact.get("artifact_type"),
+            "reference_context": {
+                "reference_models_count": int(references_payload.get("reference_models_count", 0) or 0),
+                "fallback_used": bool(references_payload.get("fallback_used", False)),
+                "references": references_payload.get("references", []),
+            },
             "elapsed_seconds": round(time.time() - started, 2),
         }
         if on_progress is not None:
@@ -154,6 +160,7 @@ def _poll_until_trained(
                 "trained_proposal": selected_proposal or (trained[0] if trained else {}),
                 "summary": summary,
                 "run": run_payload,
+                "references": references_payload,
                 "all_run_proposals": proposals,
                 "elapsed_seconds": round(time.time() - started, 2),
             }
@@ -256,6 +263,7 @@ def main() -> int:
     trained_proposal = result.get("trained_proposal", {})
     summary = result.get("summary", {})
     run_payload = result.get("run", {}) if isinstance(result.get("run"), dict) else {}
+    references_payload = result.get("references", {}) if isinstance(result.get("references"), dict) else {}
     output = {
         "ok": True,
         "run_id": run_id,
@@ -278,6 +286,12 @@ def main() -> int:
         "latest_event_type": (summary.get("latest_event") or {}).get("event_type"),
         "latest_artifact_type": (summary.get("latest_artifact") or {}).get("artifact_type"),
         "latest_artifact_uri": (summary.get("latest_artifact") or {}).get("uri"),
+        "reference_context": {
+            "reference_models_count": int(references_payload.get("reference_models_count", 0) or 0),
+            "reference_policy_version": references_payload.get("reference_policy_version"),
+            "fallback_used": bool(references_payload.get("fallback_used", False)),
+            "references": references_payload.get("references", []),
+        },
     }
     print(json.dumps(output, ensure_ascii=False, indent=2))
     return 0
