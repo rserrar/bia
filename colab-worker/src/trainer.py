@@ -1,7 +1,9 @@
 import time
 import os
 import json
+import gc
 import hashlib
+import importlib
 import logging
 import traceback
 from pathlib import Path
@@ -240,6 +242,86 @@ class ModelTrainerEngine:
         self.checkpoint_every_epochs = max(1, int(os.getenv("V2_CHECKPOINT_EVERY_EPOCHS", "1")))
         self.resume_enabled = os.getenv("V2_RESUME_ENABLED", "true").lower() in {"1", "true", "yes"}
         self.max_resume_attempts = max(0, int(os.getenv("V2_MAX_RESUME_ATTEMPTS", "2")))
+        self._experiment_config_cache: dict[str, Any] | None = None
+        self._all_data_cache: dict[str, Any] | None = None
+        self._legacy_utils_cache: tuple[Any, Any, Any, Any, Any] | None = None
+
+    def _load_legacy_training_utils(self) -> tuple[Any, Any, Any, Any, Any]:
+        if self._legacy_utils_cache is not None:
+            return cast(tuple[Any, Any, Any, Any, Any], self._legacy_utils_cache)
+        try:
+            from shared.utils.data_loading_utils import load_all_raw_data_sources, derive_additional_features_and_targets
+            from shared.utils.data_preparation_utils import prepare_model_specific_inputs_outputs, split_and_scale_data
+            from shared.utils.model_builder import build_model_from_json_definition
+        except ModuleNotFoundError:
+            data_loading_utils = importlib.import_module("utils.data_loading_utils")
+            data_preparation_utils = importlib.import_module("utils.data_preparation_utils")
+            model_builder_module = importlib.import_module("utils.model_builder")
+            load_all_raw_data_sources = data_loading_utils.load_all_raw_data_sources
+            derive_additional_features_and_targets = data_loading_utils.derive_additional_features_and_targets
+            prepare_model_specific_inputs_outputs = data_preparation_utils.prepare_model_specific_inputs_outputs
+            split_and_scale_data = data_preparation_utils.split_and_scale_data
+            build_model_from_json_definition = model_builder_module.build_model_from_json_definition
+        self._legacy_utils_cache = cast(tuple[Any, Any, Any, Any, Any], (
+            load_all_raw_data_sources,
+            derive_additional_features_and_targets,
+            prepare_model_specific_inputs_outputs,
+            split_and_scale_data,
+            build_model_from_json_definition,
+        ))
+        return cast(tuple[Any, Any, Any, Any, Any], self._legacy_utils_cache)
+
+    def _load_training_data_context(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        if self._experiment_config_cache is not None and self._all_data_cache is not None:
+            return self._experiment_config_cache, self._all_data_cache
+
+        (
+            load_all_raw_data_sources,
+            derive_additional_features_and_targets,
+            _prepare_model_specific_inputs_outputs,
+            _split_and_scale_data,
+            _build_model_from_json_definition,
+        ) = self._load_legacy_training_utils()
+
+        print("📊 Carregant el fitxer de configuració de l'experiment (cache warmup)...")
+        experiment_path = Path(
+            os.getenv(
+                "V2_LEGACY_EXPERIMENT_CONFIG_PATH",
+                str(self.repo_root / "configs" / "experiment_config.json"),
+            )
+        )
+        experiment_path = _resolve_repo_path(str(experiment_path), self.repo_root)
+        with open(experiment_path, "r", encoding="utf-8") as f:
+            exp_config = json.load(f)
+
+        base_data_dir = self.repo_root / exp_config.get("data_dir", "data")
+        input_cfg = exp_config.get("input_features_config", [])
+        output_cfg = exp_config.get("output_targets_config", [])
+
+        print("🔨 Carregant dades font només una vegada per la sessió del trainer...")
+        raw_sources = load_all_raw_data_sources(
+            exp_config.get("data_paths", {}),
+            input_cfg,
+            output_cfg,
+            base_data_dir=str(base_data_dir),
+        )
+        all_data = derive_additional_features_and_targets(raw_sources, input_cfg, output_cfg)
+        self._experiment_config_cache = exp_config
+        self._all_data_cache = all_data
+        return exp_config, all_data
+
+    def _release_training_memory(self, *objects: Any) -> None:
+        for obj in objects:
+            if isinstance(obj, list):
+                obj.clear()
+            elif isinstance(obj, dict):
+                obj.clear()
+        if tf is not None:
+            try:
+                tf.keras.backend.clear_session()
+            except Exception:
+                pass
+        gc.collect()
 
     def _training_config_hash(self, model_def: dict[str, Any]) -> str:
         training_cfg = model_def.get("training_config", {}) if isinstance(model_def.get("training_config", {}), dict) else {}
@@ -347,6 +429,15 @@ class ModelTrainerEngine:
     def _train_proposal(self, proposal: dict[str, Any]):
         proposal_id = str(proposal.get("proposal_id", ""))
         run_id = str(proposal.get("source_run_id", ""))
+        keras_model = None
+        history = None
+        X_train: list[Any] = []
+        Y_train: list[Any] = []
+        X_val: list[Any] = []
+        Y_val: list[Any] = []
+        X_test: list[Any] = []
+        Y_test: list[Any] = []
+        scalers: dict[str, Any] = {}
         
         try:
             # 1. Obtenir definició d'arquitectura
@@ -357,46 +448,28 @@ class ModelTrainerEngine:
             model_def["model_id"] = proposal_id
             resume_state = self._resolve_resume_state(proposal, model_def)
 
-            # 2. Reutilitzar utilitats de dades/model (shared first, legacy fallback)
-            try:
-                from shared.utils.data_loading_utils import load_all_raw_data_sources, derive_additional_features_and_targets
-                from shared.utils.data_preparation_utils import prepare_model_specific_inputs_outputs, split_and_scale_data
-                from shared.utils.model_builder import build_model_from_json_definition
-            except ModuleNotFoundError:
-                from utils.data_loading_utils import load_all_raw_data_sources, derive_additional_features_and_targets
-                from utils.data_preparation_utils import prepare_model_specific_inputs_outputs, split_and_scale_data
-                from utils.model_builder import build_model_from_json_definition
+            (
+                _load_all_raw_data_sources,
+                _derive_additional_features_and_targets,
+                prepare_model_specific_inputs_outputs,
+                split_and_scale_data,
+                build_model_from_json_definition,
+            ) = self._load_legacy_training_utils()
+            exp_config, all_data = self._load_training_data_context()
 
-            print("📊 Carregant el fitxer de configuració de l'experiment (V1 compatibility)...")
-            experiment_path = Path(
-                os.getenv(
-                    "V2_LEGACY_EXPERIMENT_CONFIG_PATH",
-                    str(self.repo_root / "configs" / "experiment_config.json"),
-                )
-            )
-            experiment_path = _resolve_repo_path(str(experiment_path), self.repo_root)
-            with open(experiment_path, "r", encoding="utf-8") as f:
-                exp_config = json.load(f)
-
-            base_data_dir = self.repo_root / exp_config.get("data_dir", "data")
-            
             # Necessari per reomplir els arrays "runtime" esperats pel V1 format
             input_cfg = exp_config.get("input_features_config", [])
             output_cfg = exp_config.get("output_targets_config", [])
             model_def["input_features_config_runtime"] = input_cfg
             model_def["output_targets_config_runtime"] = output_cfg
 
-            print("🔨 Instanciant les dades locals i processant-les...")
-            raw_sources = load_all_raw_data_sources(
-                exp_config.get("data_paths", {}), 
-                input_cfg, 
-                output_cfg, 
-                base_data_dir=str(base_data_dir)
-            )
-            all_data = derive_additional_features_and_targets(raw_sources, input_cfg, output_cfg)
-            
+            print("🔨 Preparant tensors específics del model a partir de dades cachejades...")
             X_list, Y_list, in_names, out_names = prepare_model_specific_inputs_outputs(all_data, model_def)
             (X_train, Y_train), (X_val, Y_val), (X_test, Y_test), scalers = split_and_scale_data(X_list, Y_list, in_names, exp_config, model_def)
+            del X_list, Y_list, in_names, out_names, X_test, Y_test, scalers
+            X_test = []
+            Y_test = []
+            scalers = {}
 
             print("🏗️ Construint el graf Keras del model...")
             keras_model = build_model_from_json_definition(model_def)
@@ -637,6 +710,18 @@ class ModelTrainerEngine:
                 self.api.add_event(run_id, "model_training_failed", f"Error a l'entrenar {proposal_id}", {"error": err_msg})
             except Exception as event_error:
                 print(f"⚠️ API: no s'ha pogut enviar event failed ({event_error})")
+        finally:
+            if keras_model is not None:
+                try:
+                    del keras_model
+                except Exception:
+                    pass
+            if history is not None:
+                try:
+                    del history
+                except Exception:
+                    pass
+            self._release_training_memory(X_train, Y_train, X_val, Y_val, X_test, Y_test, scalers)
 
     def _update_champion_selection(self, run_id: str) -> None:
         try:
