@@ -90,6 +90,7 @@ def _poll_until_trained(
     last_seen: dict = {}
     while True:
         run_payload, _ = _request_json("GET", api_base_url, f"/runs/{run_id}", token)
+        timeline_payload, _ = _request_json("GET", api_base_url, f"/runs/{run_id}/timeline?limit=25", token)
         references_payload, _ = _request_json("GET", api_base_url, f"/runs/{run_id}/references?limit=5", token)
         proposals_payload, _ = _request_json("GET", api_base_url, "/model-proposals?limit=400", token)
         proposals = [
@@ -125,7 +126,13 @@ def _poll_until_trained(
         artifact_type = str(latest_artifact.get("artifact_type", ""))
         event_type = str(latest_event.get("event_type", ""))
         artifact_ok = artifact_type in {"trained_model", "champion_model"}
-        event_ok = event_type in {"model_training_completed", "champion_selected", "champion_kept", "champion_selection_skipped"}
+        terminal_event_types = {"model_training_completed", "champion_selected", "champion_kept", "champion_selection_skipped"}
+        timeline_items = timeline_payload.get("timeline", []) if isinstance(timeline_payload, dict) else []
+        terminal_event_seen = any(
+            isinstance(item, dict) and str(item.get("type", "")) in terminal_event_types
+            for item in timeline_items
+        )
+        event_ok = event_type in terminal_event_types or terminal_event_seen
 
         progress_payload = {
             "stage": "training_in_progress",
@@ -143,6 +150,7 @@ def _poll_until_trained(
             "latest_event_type": latest_event.get("event_type"),
             "latest_event_label": latest_event.get("label"),
             "latest_artifact_type": latest_artifact.get("artifact_type"),
+            "terminal_event_seen": terminal_event_seen,
             "reference_context": {
                 "reference_models_count": int(references_payload.get("reference_models_count", 0) or 0),
                 "fallback_used": bool(references_payload.get("fallback_used", False)),
@@ -173,6 +181,7 @@ def _poll_until_trained(
             "active": len(active),
             "latest_event_type": latest_event.get("event_type"),
             "latest_artifact_type": latest_artifact.get("artifact_type"),
+            "terminal_event_seen": terminal_event_seen,
         }
         if time.time() - started > timeout_seconds:
             raise TimeoutError(f"Timeout waiting trained metadata/artifact/event for run {run_id}. last_seen={last_seen}")
