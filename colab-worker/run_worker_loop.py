@@ -222,6 +222,21 @@ def _as_positive_int(value: object, default: int = 1) -> int:
     return max(1, default)
 
 
+def _as_non_negative_int(value: object, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return max(0, default)
+    if isinstance(value, int):
+        return max(0, value)
+    if isinstance(value, float):
+        return max(0, int(value))
+    if isinstance(value, str):
+        try:
+            return max(0, int(value.strip() or str(default)))
+        except Exception:
+            return max(0, default)
+    return max(0, default)
+
+
 def _execute_request(client: ApiClient, request_id: str, request: dict, worker_id: str) -> tuple[bool, dict]:
     request_type = str(request.get("type", "")).strip()
     config_raw = request.get("config")
@@ -237,6 +252,9 @@ def _execute_request(client: ApiClient, request_id: str, request: dict, worker_i
         "V2_E2E_GENERATIONS": generations,
         "V2_LLM_NUM_NEW_MODELS": models_per_generation,
         "V2_MODELS_PER_GENERATION": models_per_generation,
+        "V2_BOOTSTRAP_SEED_MODEL_IF_EMPTY": "true" if bool(config.get("bootstrap_seed_model_if_empty", False)) else "false",
+        "V2_AUTO_PROCESS_PROPOSALS_PHASE0": "true" if bool(config.get("auto_process_proposals_phase0", True)) else "false",
+        "V2_LLM_MIN_INTERVAL_SECONDS": str(_as_non_negative_int(config.get("llm_min_interval_seconds", os.getenv("V2_LLM_MIN_INTERVAL_SECONDS", "20")), 20)),
         "V2_CHAMPION_SCOPE": str(config.get("champion_scope", os.getenv("V2_CHAMPION_SCOPE", "run"))),
         "V2_SUPERVISOR_AUTO_FEED": "true" if bool(config.get("auto_feed", False)) else "false",
         "V2_RESUME_ENABLED": "true" if bool(config.get("resume_enabled", True)) else "false",

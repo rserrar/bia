@@ -632,6 +632,9 @@ try {
             'champion_scope' => is_string($_POST['champion_scope'] ?? null) ? (string) $_POST['champion_scope'] : 'run',
             'auto_feed' => in_array((string) ($_POST['auto_feed'] ?? '1'), ['1', 'true', 'yes'], true),
             'resume_enabled' => in_array((string) ($_POST['resume_enabled'] ?? '1'), ['1', 'true', 'yes'], true),
+            'bootstrap_seed_model_if_empty' => in_array((string) ($_POST['bootstrap_seed_model_if_empty'] ?? '0'), ['1', 'true', 'yes'], true),
+            'auto_process_proposals_phase0' => in_array((string) ($_POST['auto_process_proposals_phase0'] ?? '1'), ['1', 'true', 'yes'], true),
+            'llm_min_interval_seconds' => is_numeric($_POST['llm_min_interval_seconds'] ?? null) ? (int) $_POST['llm_min_interval_seconds'] : 20,
         ];
         $service->createExecutionRequest($requestType, $config);
         redirectToMonitorHome();
@@ -819,10 +822,14 @@ try {
             </select></label>
             <label class="kpi">Auto-feed<br><select name="auto_feed"><option value="1">on</option><option value="0">off</option></select></label>
             <label class="kpi">Resume<br><select name="resume_enabled"><option value="1">on</option><option value="0">off</option></select></label>
+            <label class="kpi">Seed inicial<br><select name="bootstrap_seed_model_if_empty"><option value="0">off</option><option value="1">on</option></select></label>
+            <label class="kpi">Auto phase0<br><select name="auto_process_proposals_phase0"><option value="1">on</option><option value="0">off</option></select></label>
+            <label class="kpi">LLM interval<br><input type="number" name="llm_min_interval_seconds" value="20" min="0" style="width:70px;"></label>
             <button type="submit">Crear execució</button>
         </form>
         <div class="kpi">Què fa: el servidor crea el pla, el worker de Colab el reclama i executa el cicle complet sense tocar scripts manuals.</div>
         <div class="kpi">Generacions = nombre de cicles complets. Models/generació = quants candidats nous intenta generar l'LLM a cada cicle.</div>
+        <div class="kpi">Seed inicial: si està on i el sistema no té proposals, Colab crea un model base automàtic. Per proves netes i recompte exacte, millor off.</div>
         <div class="kpi">small_test: Execució ràpida amb dataset petit per validar pipeline. Durada típica: 4-8 min per model.</div>
         <div class="kpi">default: Configuració equilibrada per iterar amb més qualitat. Durada típica: 8-15 min per model.</div>
         <div class="kpi">real_large: Dataset gran i cost alt; pensat per runs llargs i més fiables. Durada típica: 18-30 min per model.</div>
