@@ -166,15 +166,18 @@ class EvolutionWorkerEngine:
         poll_seconds = max(5, int(os.getenv("V2_WAIT_FOR_GENERATION_DRAIN_POLL_SECONDS", "10")))
         started = time.time()
         prefetched_generation: int | None = None
+        print(f"⏳ Esperant que la generació {generation} es buidi abans de continuar...")
         self.api.add_event(run_id, "generation_drain_wait_started", f"Esperant que la generació {generation} es buidi", {"generation": generation, "prefetch_generation": prefetch_generation})
         while True:
             self._send_heartbeat()
             self._process_queued_proposals_phase0_if_enabled()
             counts = self._generation_proposal_counts(run_id, generation)
             if counts["total"] == 0 or counts["active"] == 0:
+                print(f"✅ Generació {generation} resolta: total={counts['total']} trained={counts['trained']} rejected={counts['rejected']}")
                 self.api.add_event(run_id, "generation_drain_wait_completed", f"Generació {generation} buidada", {"generation": generation, **counts})
                 return prefetched_generation
             if prefetch_generation is not None and prefetched_generation is None and counts["training"] == 1 and counts["active"] == 1:
+                print(f"⚡ Prefetch de la generació {prefetch_generation} mentre es tanca la {generation}")
                 self.api.add_event(run_id, "generation_prefetch_started", f"Prefetch generació {prefetch_generation} mentre es tanca la {generation}", {"current_generation": generation, "prefetch_generation": prefetch_generation, **counts})
                 self._run_generation_step(prefetch_generation)
                 prefetched_generation = prefetch_generation
@@ -216,7 +219,9 @@ class EvolutionWorkerEngine:
                     f"de la generació {generation}."
                 )
                 candidate = self.llm.generate_candidate(context)
+                print(f"📩 Resposta rebuda de l'LLM per generació {generation} candidat {candidate_index + 1}")
                 if not candidate:
+                    print(f"⚠️ L'LLM no ha retornat cap proposta útil per generació {generation} candidat {candidate_index + 1}")
                     continue
                 base_model_id = str(candidate.get("base_model_id", "")).strip() or "unknown_base_model"
                 proposal = candidate.get("proposal")
@@ -231,6 +236,7 @@ class EvolutionWorkerEngine:
                 llm_metadata_payload["proposal_fingerprint"] = proposal_fingerprint
 
                 if self._proposal_fingerprint_exists(run_id, proposal_fingerprint):
+                    print(f"🪞 Proposta duplicada descartada per fingerprint a generació {generation} candidat {candidate_index + 1}")
                     self.api.add_event(
                         run_id,
                         "llm_duplicate_skipped",
@@ -264,6 +270,7 @@ class EvolutionWorkerEngine:
                 proposal_id = str(created.get("proposal_id", ""))
                 if proposal_id != "":
                     self.api.enqueue_model_proposal_phase0(proposal_id)
+                    print(f"🧩 Proposal creada i enviada a phase0: {proposal_id} (gen={generation}, candidat={candidate_index + 1})")
                     recent_generated_models.insert(0, {
                         "proposal_id": proposal_id,
                         "fingerprint": proposal_fingerprint,
@@ -282,6 +289,7 @@ class EvolutionWorkerEngine:
                     },
                 )
             except LlmRateLimitError as error:
+                print(f"⛔ Rate limit LLM a generació {generation} candidat {candidate_index + 1}: {error}")
                 self.api.add_event(
                     run_id,
                     "llm_rate_limited",
@@ -294,6 +302,7 @@ class EvolutionWorkerEngine:
                 )
                 raise
             except Exception as error:
+                print(f"❌ Error generant proposta a generació {generation} candidat {candidate_index + 1}: {error}")
                 self.api.add_event(
                     run_id,
                     "llm_proposal_error",
@@ -632,6 +641,7 @@ class EvolutionWorkerEngine:
         last_heartbeat = 0.0
         if self.state.generation == 0:
             self._run_generation_step(0)
+            print("🪜 Generació 0 completada com a baseline; les propostes noves comencen a la generació 1")
         next_generation = max(1, self.state.generation)
         prefetched_generation: int | None = None
         while next_generation <= self.config.max_generations:

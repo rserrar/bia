@@ -459,6 +459,7 @@ class ModelTrainerEngine:
             )
         except Exception:
             pass
+        print(f"🩹 Intentant reparar o reemplaçar {proposal.get('proposal_id', '')} després de l'error: {error_message}")
 
         for attempt in range(4):
             candidate_to_submit: dict[str, Any] | None = None
@@ -466,13 +467,17 @@ class ModelTrainerEngine:
             if attempt == 0:
                 try:
                     candidate_to_submit = self.llm._repair_candidate_after_validation_error(original_candidate, error_message, context)
+                    print(f"🔧 Resposta de repair rebuda per {proposal.get('proposal_id', '')} (intent {attempt + 1})")
                 except Exception as repair_error:
+                    print(f"❌ Repair LLM fallida per {proposal.get('proposal_id', '')} (intent {attempt + 1}): {repair_error}")
                     self.api.add_event(run_id, "model_repair_failed", f"Repair LLM fallida per {proposal.get('proposal_id', '')}", {"error": str(repair_error), "attempt": attempt + 1})
             else:
                 mode = "replacement"
                 try:
                     candidate_to_submit = self.llm.generate_candidate(context)
+                    print(f"🆕 Reemplaç generat per {proposal.get('proposal_id', '')} (intent {attempt + 1})")
                 except Exception as replacement_error:
+                    print(f"❌ Generació reemplaçament fallida per {proposal.get('proposal_id', '')} (intent {attempt + 1}): {replacement_error}")
                     self.api.add_event(run_id, "model_repair_failed", f"Generació reemplaçament fallida per {proposal.get('proposal_id', '')}", {"error": str(replacement_error), "attempt": attempt + 1})
 
             if not isinstance(candidate_to_submit, dict):
@@ -568,6 +573,7 @@ class ModelTrainerEngine:
         repaired_id = str(created.get("proposal_id", ""))
         if repaired_id == "":
             return None
+        print(f"🧾 Proposal reparada/reemplaç creada: {repaired_id} (mode={mode}, intent={attempt_number})")
         self.api.enqueue_model_proposal_phase0(repaired_id)
         try:
             self.api.process_model_proposals_phase0(limit=5)
@@ -576,6 +582,7 @@ class ModelTrainerEngine:
         refreshed = self.api.get_model_proposal(repaired_id)
         refreshed_status = str(refreshed.get("status", ""))
         if refreshed_status == "validated_phase0":
+            print(f"✅ Proposal {repaired_id} validada a phase0 i reenviada a la cua")
             try:
                 self.api.update_proposal_status(
                     str(proposal.get("proposal_id", "")),
@@ -601,6 +608,7 @@ class ModelTrainerEngine:
             f"Proposal reparada rebutjada a phase0: {repaired_id}",
             {"original_proposal_id": proposal.get("proposal_id"), "repaired_proposal_id": repaired_id, "status": refreshed_status, "mode": mode, "attempt": attempt_number},
         )
+        print(f"⚠️ Proposal {repaired_id} rebutjada a phase0 després del {mode} (status={refreshed_status})")
         return None
 
     def _current_memory_mb(self) -> float | None:
@@ -895,6 +903,7 @@ class ModelTrainerEngine:
                     "resume_attempts": int(resume_state["resume_attempts"]) + (1 if resumed_from_checkpoint else 0),
                 },
             )
+            print(f"🔥 Training iniciat per {proposal_id} (epochs={epochs}, max_seconds={active_max_training_seconds})")
             
             print(f"🔥 Donant inici al mètode keras_model.fit() per un màxim de {epochs} èpoques.")
             start_t = time.time()
