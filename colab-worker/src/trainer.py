@@ -397,14 +397,14 @@ class ModelTrainerEngine:
             return max_epochs, max_training_seconds
         return max_epochs, max_training_seconds
 
-    def _attempt_repair_failed_proposal(self, proposal: dict[str, Any], run_id: str, error_message: str) -> None:
+    def _attempt_repair_failed_proposal(self, proposal: dict[str, Any], run_id: str, error_message: str) -> bool:
         if not self.llm.config.enabled:
-            return
+            return False
         llm_metadata_raw = proposal.get("llm_metadata")
         llm_metadata = llm_metadata_raw if isinstance(llm_metadata_raw, dict) else {}
         repair_depth = int(llm_metadata.get("repair_depth", 0) or 0)
         if repair_depth >= 1:
-            return
+            return False
         lowered = error_message.lower()
         non_repairable_markers = [
             "cuda",
@@ -426,7 +426,7 @@ class ModelTrainerEngine:
             "name resolution",
         ]
         if any(marker in lowered for marker in non_repairable_markers):
-            return
+            return False
 
         candidate_payload = proposal.get("proposal") if isinstance(proposal.get("proposal"), dict) else {}
         original_candidate = {
@@ -446,7 +446,21 @@ class ModelTrainerEngine:
         context["reference_models"] = references
         context["reference_selection_trace"] = selection_trace
 
-        for attempt in range(3):
+        try:
+            self.api.add_event(
+                run_id,
+                "model_repair_started",
+                f"Intentant reparar {proposal.get('proposal_id', '')}",
+                {
+                    "proposal_id": proposal.get("proposal_id"),
+                    "error": error_message,
+                    "reference_models_count": len(references),
+                },
+            )
+        except Exception:
+            pass
+
+        for attempt in range(4):
             candidate_to_submit: dict[str, Any] | None = None
             mode = "repair"
             if attempt == 0:
@@ -465,7 +479,18 @@ class ModelTrainerEngine:
                 continue
             submitted_id = self._submit_repaired_candidate(run_id, proposal, candidate_to_submit, error_message, repair_depth, mode, attempt + 1)
             if submitted_id is not None:
-                return
+                return True
+
+        try:
+            self.api.add_event(
+                run_id,
+                "model_repair_exhausted",
+                f"No s'ha pogut reparar ni reemplaçar {proposal.get('proposal_id', '')}",
+                {"proposal_id": proposal.get("proposal_id"), "error": error_message},
+            )
+        except Exception:
+            pass
+        return False
 
     def _collect_reference_models_for_prompt(self, run_id: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         max_refs = max(0, int(os.getenv("V2_LLM_NUM_REFERENCE_MODELS", "3")))
@@ -551,6 +576,18 @@ class ModelTrainerEngine:
         refreshed = self.api.get_model_proposal(repaired_id)
         refreshed_status = str(refreshed.get("status", ""))
         if refreshed_status == "validated_phase0":
+            try:
+                self.api.update_proposal_status(
+                    str(proposal.get("proposal_id", "")),
+                    str(proposal.get("status", "rejected")),
+                    {
+                        "repair_replacement_proposal_id": repaired_id,
+                        "repair_last_mode": mode,
+                        "repair_last_attempt": attempt_number,
+                    },
+                )
+            except Exception:
+                pass
             self.api.add_event(
                 run_id,
                 "model_repair_enqueued",
@@ -1011,7 +1048,9 @@ class ModelTrainerEngine:
             except Exception as event_error:
                 print(f"⚠️ API: no s'ha pogut enviar event failed ({event_error})")
             try:
-                self._attempt_repair_failed_proposal(proposal, run_id, err_msg)
+                repaired = self._attempt_repair_failed_proposal(proposal, run_id, err_msg)
+                if not repaired:
+                    print(f"ℹ️ No s'ha pogut reparar o reemplaçar {proposal_id} després del fallit")
             except Exception as repair_error:
                 print(f"⚠️ Repair automàtic fallit per {proposal_id}: {repair_error}")
         finally:
