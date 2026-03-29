@@ -35,6 +35,8 @@ Nota LLM:
 - defineix `V2_LLM_FALLBACK_PROVIDER=gemini` i `GEMINI_API_KEY` o `V2_LLM_FALLBACK_API_KEY`
 - model recomanat per començar: `gemini-3-flash-preview`
 - amb el fallback nadiu no cal indicar cap endpoint OpenAI-compatible per Gemini
+- per al flux V2 actual, fixa `V2_LLM_USE_LEGACY_INTERFACE=false`
+- deixa `V2_LLM_REPAIR_ON_VALIDATION_ERROR=true` per mantenir la reparació automàtica activa
 
 ## Layout de dades per al worker
 
