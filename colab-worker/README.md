@@ -32,6 +32,8 @@ Nota LLM:
 
 - si vols fallback nadiu a Gemini, el notebook ha d'instal·lar `google-genai`
 - defineix `V2_LLM_FALLBACK_PROVIDER=gemini` i `GEMINI_API_KEY` o `V2_LLM_FALLBACK_API_KEY`
+- model recomanat per començar: `gemini-3-flash-preview`
+- amb el fallback nadiu no cal indicar cap endpoint OpenAI-compatible per Gemini
 
 ## Layout de dades per al worker
 
