@@ -527,6 +527,43 @@ class EvolutionWorkerEngine:
                 {"error": str(error)},
             )
 
+    def _pending_training_counts(self, run_id: str) -> dict[str, int]:
+        active_statuses = {"draft", "queued_phase0", "validated_phase0", "accepted", "training"}
+        counts = {"total": 0, "active": 0, "trained": 0, "rejected": 0}
+        try:
+            proposals = self.api.list_model_proposals(limit=500)
+        except Exception:
+            return counts
+        for proposal in proposals:
+            if str(proposal.get("source_run_id", "")) != run_id:
+                continue
+            counts["total"] += 1
+            status = str(proposal.get("status", ""))
+            if status in active_statuses:
+                counts["active"] += 1
+            elif status == "trained":
+                counts["trained"] += 1
+            elif status == "rejected":
+                counts["rejected"] += 1
+        return counts
+
+    def _wait_for_training_queue_to_drain(self, run_id: str) -> None:
+        timeout_seconds = max(60, int(os.getenv("V2_WAIT_FOR_TRAINING_DRAIN_SECONDS", "86400")))
+        poll_seconds = max(5, int(os.getenv("V2_WAIT_FOR_TRAINING_DRAIN_POLL_SECONDS", "10")))
+        started = time.time()
+        self.api.add_event(run_id, "training_drain_wait_started", "Esperant que s'acabi la cua d'entrenament", {"timeout_seconds": timeout_seconds})
+        while True:
+            self._send_heartbeat()
+            self._process_queued_proposals_phase0_if_enabled()
+            counts = self._pending_training_counts(run_id)
+            if counts["total"] > 0 and counts["active"] == 0:
+                self.api.add_event(run_id, "training_drain_wait_completed", "Cua d'entrenament buidada", counts)
+                return
+            if time.time() - started > timeout_seconds:
+                self.api.add_event(run_id, "training_drain_wait_timeout", "Timeout esperant la cua d'entrenament", counts)
+                raise TimeoutError(f"training queue did not drain for run {run_id}: {counts}")
+            time.sleep(poll_seconds)
+
     def run(self) -> None:
         self._ensure_run()
         run_id = self.state.run_id
@@ -552,6 +589,7 @@ class EvolutionWorkerEngine:
             self._process_queued_proposals_phase0_if_enabled()
             time.sleep(1)
         self._process_queued_proposals_phase0_if_enabled()
+        self._wait_for_training_queue_to_drain(run_id)
         self.api.update_status(run_id, "completed", self.state.generation)
         self.api.add_event(run_id, "run_completed", "Execució finalitzada")
         self.state.status = "completed"
