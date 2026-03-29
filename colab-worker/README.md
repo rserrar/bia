@@ -24,6 +24,7 @@ Aquest notebook:
 - munta Drive i actualitza el repo
 - extreu el ZIP dins `V2/data/runtime_drive/`
 - detecta automàticament la carpeta que conté tots els CSV requerits
+- imprimeix quantes files té cada CSV canònic per verificar que s'està usant el dataset correcte
 - genera un `experiment_config.drive_runtime.json` apuntant al dataset extret
 - configura l'entorn per al control plane server-driven
 - arrenca `run_worker_loop.py`
