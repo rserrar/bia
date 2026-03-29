@@ -84,6 +84,51 @@ function formatDurationShort($seconds): string
     return sprintf('%ds', $secs);
 }
 
+function inferExecutionRunId(array $request, string $latestRunId): string
+{
+    $currentRunId = (string) ($request['current_run_id'] ?? '');
+    if ($currentRunId !== '') {
+        return $currentRunId;
+    }
+    $runIds = is_array($request['run_ids'] ?? null) ? $request['run_ids'] : [];
+    if (count($runIds) > 0) {
+        return (string) ($runIds[0] ?? '');
+    }
+    $status = (string) ($request['status'] ?? '');
+    if (!in_array($status, ['claimed', 'running'], true)) {
+        return '';
+    }
+    return $latestRunId;
+}
+
+function inferExecutionProgress(array $request, string $inferredRunId, array $runsById, array $proposals): array
+{
+    $progress = is_array($request['progress'] ?? null) ? $request['progress'] : [];
+    if ($inferredRunId === '') {
+        return $progress;
+    }
+    $run = is_array($runsById[$inferredRunId] ?? null) ? $runsById[$inferredRunId] : [];
+    $runGeneration = (int) ($run['generation'] ?? 0);
+    $matching = array_values(array_filter(
+        $proposals,
+        static fn(array $proposal): bool => (string) ($proposal['source_run_id'] ?? '') === $inferredRunId
+    ));
+    $modelsGenerated = count($matching);
+    $modelsTrained = count(array_filter($matching, static fn(array $proposal): bool => (string) ($proposal['status'] ?? '') === 'trained'));
+    if ($modelsGenerated === 0 && $runGeneration === 0) {
+        return $progress;
+    }
+    $generationsTotal = (int) ($progress['generations_total'] ?? ($request['config']['generations'] ?? 1));
+    $progress['generations_total'] = max(1, $generationsTotal);
+    $progress['generations_completed'] = max((int) ($progress['generations_completed'] ?? 0), $runGeneration);
+    $progress['models_generated'] = max((int) ($progress['models_generated'] ?? 0), $modelsGenerated);
+    $progress['models_trained'] = max((int) ($progress['models_trained'] ?? 0), $modelsTrained);
+    if ($progress['generations_total'] > 0) {
+        $progress['progress_percent'] = min(100, round((($progress['generations_completed'] / $progress['generations_total']) * 100), 1));
+    }
+    return $progress;
+}
+
 function estimateExecutionDurationMinutes(array $config): int
 {
     $profile = strtolower((string) ($config['profile'] ?? 'small_test'));
@@ -816,6 +861,12 @@ try {
     $runs = is_array($runsPayload['runs'] ?? null) ? $runsPayload['runs'] : [];
     $executionRequests = is_array($executionRequestsPayload['execution_requests'] ?? null) ? $executionRequestsPayload['execution_requests'] : [];
     $proposals = is_array($proposalsPayload['proposals'] ?? null) ? $proposalsPayload['proposals'] : [];
+    $runsById = [];
+    foreach ($runs as $run) {
+        if (is_array($run) && (string) ($run['run_id'] ?? '') !== '') {
+            $runsById[(string) $run['run_id']] = $run;
+        }
+    }
     $recentEvents = is_array($recentEventsPayload['events'] ?? null) ? $recentEventsPayload['events'] : [];
     $recentMetrics = is_array($recentMetricsPayload['metrics'] ?? null) ? $recentMetricsPayload['metrics'] : [];
     $latestRunId = count($runs) > 0 ? (string) ($runs[0]['run_id'] ?? '') : '';
@@ -853,7 +904,7 @@ try {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <?php if ($autoRefreshEnabled): ?>
-    <meta http-equiv="refresh" content="15">
+    <meta http-equiv="refresh" content="30">
     <?php endif; ?>
     <title>V2 Monitor</title>
     <style>
@@ -917,7 +968,7 @@ try {
         $showResetConfirm = (string) ($_GET['confirm_reset'] ?? '') === '1';
         $limitsResult = is_array($_SESSION['execution_limits_result'] ?? null) ? $_SESSION['execution_limits_result'] : null; unset($_SESSION['execution_limits_result']);
     ?>
-    <div class="meta">Actualització automàtica <?php echo $autoRefreshEnabled ? 'activada (15s)' : 'desactivada'; ?> · Runs: <?php echo count($runs); ?> · <a href="./monitor.php?logout=1">Sortir</a></div>
+    <div class="meta">Actualització automàtica <?php echo $autoRefreshEnabled ? 'activada (30s)' : 'desactivada'; ?> · Runs: <?php echo count($runs); ?> · <a href="./monitor.php?logout=1">Sortir</a></div>
     <div class="meta">Selection policy: <span class="mono"><?php echo htmlspecialchars((string) ($championBoard['policy_version'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span> · profile: <span class="mono"><?php echo htmlspecialchars((string) ($championBoard['policy_profile'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span></div>
     <div class="toolbar">
         <form method="post" action="./monitor.php">
@@ -1028,9 +1079,12 @@ try {
                 <?php if (!is_array($request)) { continue; } ?>
                 <?php $reqId = (string) ($request['request_id'] ?? ''); ?>
                 <?php $requestConfig = is_array($request['config'] ?? null) ? $request['config'] : []; ?>
-                <?php $requestProgress = is_array($request['progress'] ?? null) ? $request['progress'] : []; ?>
+                <?php $inferredRunId = inferExecutionRunId($request, $latestRunId); ?>
+                <?php $requestProgress = inferExecutionProgress($request, $inferredRunId, $runsById, $proposals); ?>
                 <?php $requestRunIds = is_array($request['run_ids'] ?? null) ? $request['run_ids'] : []; ?>
+                <?php if ($inferredRunId !== '' && !in_array($inferredRunId, $requestRunIds, true)) { array_unshift($requestRunIds, $inferredRunId); } ?>
                 <?php $requestResultSummary = is_array($request['result_summary'] ?? null) ? $request['result_summary'] : []; ?>
+                <?php if ($inferredRunId !== '' && ($requestResultSummary['run_id'] ?? '') === '') { $requestResultSummary['run_id'] = $inferredRunId; } ?>
                 <?php $championEventType = (string) ($requestResultSummary['latest_event_type'] ?? ''); ?>
                 <?php $repairSummary = executionRepairSummary($requestResultSummary); ?>
                 <?php $estimatedMinutes = estimateExecutionDurationMinutes($requestConfig); ?>
@@ -1047,7 +1101,7 @@ try {
                     <td><?php echo htmlspecialchars((string) (($requestConfig['generations'] ?? 1) . ' gen · ' . ($requestConfig['models_per_generation'] ?? 1) . ' models/gen'), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi"><?php echo htmlspecialchars(executionProfileExplanation((string) ($requestConfig['profile'] ?? 'small_test')), ENT_QUOTES, 'UTF-8'); ?></span><br><span class="kpi">epochs=<?php echo htmlspecialchars((string) ($requestConfig['max_epochs'] ?? 0), ENT_QUOTES, 'UTF-8'); ?> · max_s=<?php echo htmlspecialchars((string) ($requestConfig['max_training_seconds'] ?? 0), ENT_QUOTES, 'UTF-8'); ?></span></td>
                     <td><details><summary>Veure</summary><pre style="font-size:11px; margin:0; background:#1e293b; padding:4px; overflow-x:auto;"><?php echo htmlspecialchars(json_encode($requestConfig, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), ENT_QUOTES, 'UTF-8'); ?></pre></details></td>
                     <td><?php echo htmlspecialchars((string) (($requestProgress['generations_completed'] ?? 0) . '/' . ($requestProgress['generations_total'] ?? 0)), ENT_QUOTES, 'UTF-8'); ?> · models=<?php echo htmlspecialchars((string) ($requestProgress['models_generated'] ?? 0), ENT_QUOTES, 'UTF-8'); ?>/<?php echo htmlspecialchars((string) ($requestProgress['models_trained'] ?? 0), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi"><?php echo htmlspecialchars((string) ($requestProgress['progress_percent'] ?? 0), ENT_QUOTES, 'UTF-8'); ?>% completat</span></td>
-                    <td><?php echo htmlspecialchars((string) ($request['current_run_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi mono"><?php echo htmlspecialchars(implode(', ', array_slice(array_map('strval', $requestRunIds), 0, 3)), ENT_QUOTES, 'UTF-8'); ?></span></td>
+                    <td><?php echo htmlspecialchars($inferredRunId, ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi mono"><?php echo htmlspecialchars(implode(', ', array_slice(array_map('strval', $requestRunIds), 0, 3)), ENT_QUOTES, 'UTF-8'); ?></span></td>
                     <td><?php echo htmlspecialchars((string) (($request['current_stage_label'] ?? '') ?: ($request['current_stage'] ?? '')), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi"><?php echo htmlspecialchars((string) (($requestResultSummary['latest_event_type'] ?? '') ?: ($requestResultSummary['latest_artifact_type'] ?? '')), ENT_QUOTES, 'UTF-8'); ?></span></td>
                     <td>estimació <?php echo htmlspecialchars((string) $estimatedMinutes, ENT_QUOTES, 'UTF-8'); ?> min<br><span class="kpi">elapsed <?php echo htmlspecialchars($elapsedLabel, ENT_QUOTES, 'UTF-8'); ?></span></td>
                     <td><?php echo htmlspecialchars((string) ($request['claimed_by_worker'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
