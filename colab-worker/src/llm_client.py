@@ -876,9 +876,30 @@ class LlmProposalClient:
         architecture_guide = self._read_text(self.config.architecture_guide_file)
         references = context.get("reference_models")
         working_example = references[0] if isinstance(references, list) and len(references) > 0 and isinstance(references[0], dict) else {}
+        try:
+            from v2_prompt_builder import V2PromptBuilder
+            repo_root = Path(__file__).resolve().parents[2]
+            builder = V2PromptBuilder(
+                repo_root=repo_root,
+                prompt_template_file=self.config.prompt_template_file,
+                architecture_guide_file=self.config.architecture_guide_file,
+                experiment_config_file=self.config.experiment_config_file,
+                num_new_models=self.config.num_new_models,
+                num_reference_models=self.config.num_reference_models,
+            )
+            architecture_guide = builder._combined_architecture_guide(architecture_guide)
+        except Exception:
+            pass
+        error_context = {
+            "validation_error": validation_error,
+            "generation": int(context.get("generation", 0)),
+            "run_id": str(context.get("run_id", "")),
+            "latest_metrics": context.get("latest_metrics", {}),
+            "reference_selection_trace": context.get("reference_selection_trace", {}),
+        }
         prompt = template
         prompt = prompt.replace("{{buggy_model_json}}", json.dumps(model_definition, ensure_ascii=False, indent=2))
-        prompt = prompt.replace("{{error_traceback}}", validation_error)
+        prompt = prompt.replace("{{error_traceback}}", json.dumps(error_context, ensure_ascii=False, indent=2))
         prompt = prompt.replace("{{working_model_example_json}}", json.dumps(working_example, ensure_ascii=False, indent=2))
         prompt = prompt.replace("{{available_inputs_description}}", self._inputs_description(experiment))
         prompt = prompt.replace("{{available_outputs_description}}", self._outputs_description(experiment))
