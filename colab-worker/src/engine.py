@@ -632,7 +632,7 @@ class EvolutionWorkerEngine:
         last_heartbeat = 0.0
         if self.state.generation == 0:
             self._run_generation_step(0)
-        next_generation = max(1, self.state.generation + 1)
+        next_generation = max(1, self.state.generation)
         prefetched_generation: int | None = None
         while next_generation <= self.config.max_generations:
             now = time.time()
