@@ -202,59 +202,59 @@ def main() -> int:
     trial_env["V2_LLM_TRIAL_GENERATIONS"] = str(generations)
     models_per_generation = int(os.getenv("V2_LLM_NUM_NEW_MODELS", os.getenv("V2_MODELS_PER_GENERATION", "1")))
 
+    print("[e2e] start trainer supervisor-in-line")
+    trainer_env = os.environ.copy()
+    trainer = subprocess.Popen(
+        [sys.executable, str(repo / "colab-worker" / "run_trainer.py")],
+        cwd=str(repo),
+        env=trainer_env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
     print(f"[e2e] start LLM trial generations={generations}")
     _emit_progress({
         "stage": "starting_trial",
-        "stage_label": "Inicialitzant worker per generar propostes",
+        "stage_label": "Inicialitzant worker i trainer per generar i entrenar en paral·lel",
         "generations_total": generations,
         "generations_completed": 0,
         "models_generated": 0,
         "models_trained": 0,
         "models_per_generation": models_per_generation,
     })
-    trial = subprocess.run(
-        [sys.executable, str(repo / "ops" / "scripts" / "run_llm_generation_trial.py")],
-        cwd=str(repo),
-        env=trial_env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        check=False,
-    )
-    print(trial.stdout)
-    trial_json = _extract_last_json_block(trial.stdout)
-    run_id = str(trial_json.get("run_id", "")).strip()
-    if trial.returncode != 0 or not trial_json.get("ok"):
-        raise RuntimeError(f"LLM trial failed: rc={trial.returncode}, result={trial_json}")
-    if run_id == "":
-        raise RuntimeError("run_id missing in LLM trial output")
-
-    _emit_progress({
-        "stage": "generation_phase_completed",
-        "stage_label": "Generacions completades; iniciant training",
-        "run_id": run_id,
-        "current_run_id": run_id,
-        "run_ids": [run_id],
-        "generations_total": generations,
-        "generations_completed": int(trial_json.get("generations", generations) or generations),
-        "models_generated": int(trial_json.get("proposals_created", 0) or 0),
-        "models_trained": 0,
-        "latest_event_type": trial_json.get("latest_event_type"),
-        "latest_event_label": trial_json.get("latest_event_label"),
-    })
-
-    print(f"[e2e] run_id={run_id} -> start trainer")
-    trainer_env = os.environ.copy()
-    trainer = subprocess.Popen(
-        [sys.executable, str(repo / "colab-worker" / "run_trainer.py")],
-        cwd=str(repo),
-        env=trainer_env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-
     try:
+        trial = subprocess.run(
+            [sys.executable, str(repo / "ops" / "scripts" / "run_llm_generation_trial.py")],
+            cwd=str(repo),
+            env=trial_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+        )
+        print(trial.stdout)
+        trial_json = _extract_last_json_block(trial.stdout)
+        run_id = str(trial_json.get("run_id", "")).strip()
+        if trial.returncode != 0 or not trial_json.get("ok"):
+            raise RuntimeError(f"LLM trial failed: rc={trial.returncode}, result={trial_json}")
+        if run_id == "":
+            raise RuntimeError("run_id missing in LLM trial output")
+
+        _emit_progress({
+            "stage": "generation_phase_completed",
+            "stage_label": "Generacions completades; esperant tancament de training en paral·lel",
+            "run_id": run_id,
+            "current_run_id": run_id,
+            "run_ids": [run_id],
+            "generations_total": generations,
+            "generations_completed": int(trial_json.get("generations", generations) or generations),
+            "models_generated": int(trial_json.get("proposals_created", 0) or 0),
+            "models_trained": 0,
+            "latest_event_type": trial_json.get("latest_event_type"),
+            "latest_event_label": trial_json.get("latest_event_label"),
+        })
+
         result = _poll_until_trained(
             api_base_url,
             api_token,
