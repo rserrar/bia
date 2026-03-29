@@ -1063,8 +1063,10 @@ class LlmProposalClient:
             first_nested = next((item for item in nested_proposal if isinstance(item, dict)), None)
             if isinstance(first_nested, dict):
                 model_definition = first_nested
-        elif isinstance(nested_proposal, dict) and isinstance(nested_proposal.get("model_definition"), dict):
-            model_definition = nested_proposal.get("model_definition")
+        elif isinstance(nested_proposal, dict):
+            nested_model_definition = nested_proposal.get("model_definition")
+            if isinstance(nested_model_definition, dict):
+                model_definition = nested_model_definition
 
         architecture = model_definition.get("architecture_definition")
         if not isinstance(architecture, dict):
@@ -1098,6 +1100,11 @@ class LlmProposalClient:
                 merge_type = merge.get("type")
                 if isinstance(merge_type, str):
                     merge["type"] = merge_type.strip().lower()
+                source_feature_maps = merge.get("source_feature_maps")
+                if not isinstance(source_feature_maps, list) or len(source_feature_maps) == 0:
+                    inferred_sources = self._infer_merge_source_feature_maps(merge)
+                    if inferred_sources:
+                        merge["source_feature_maps"] = inferred_sources
                 layers_after_merge = merge.get("layers_after_merge")
                 if isinstance(layers_after_merge, list):
                     for layer in layers_after_merge:
@@ -1153,3 +1160,20 @@ class LlmProposalClient:
         }
         compact = normalized.replace("_", "").replace("-", "").replace(" ", "").lower()
         return mapping.get(compact, normalized)
+
+    def _infer_merge_source_feature_maps(self, merge: dict[str, Any]) -> list[str]:
+        layers_after_merge = merge.get("layers_after_merge")
+        if not isinstance(layers_after_merge, list) or len(layers_after_merge) == 0:
+            return []
+        first_layer = layers_after_merge[0]
+        if not isinstance(first_layer, dict):
+            return []
+        sources = first_layer.get("input_source_feature_maps")
+        if isinstance(sources, list):
+            clean = [str(item).strip() for item in sources if str(item).strip() != ""]
+            if clean:
+                return [clean[0]]
+        explicit = str(first_layer.get("explicit_input_source_feature_map", "")).strip()
+        if explicit != "":
+            return [explicit]
+        return []

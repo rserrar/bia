@@ -632,6 +632,8 @@ final class ApiService
             'trained_model_uri' => $llmMetadata['trained_model_uri'] ?? null,
             'training_kpis' => $trainingKpis,
             'prompt_audit' => $promptAudit,
+            'phase0_auto' => is_array($llmMetadata['phase0_auto'] ?? null) ? $llmMetadata['phase0_auto'] : [],
+            'phase0_rejected_reason' => (string) ($llmMetadata['phase0_rejected_reason'] ?? ''),
             'champion' => [
                 'active' => (bool) ($llmMetadata['champion_active'] ?? false),
                 'scope' => (string) ($llmMetadata['champion_scope'] ?? ''),
@@ -1647,6 +1649,8 @@ final class ApiService
             'resumable' => (bool) ($llmMetadata['resumable'] ?? false),
             'last_checkpoint_epoch' => $llmMetadata['last_checkpoint_epoch'] ?? null,
             'training_kpis' => is_array($llmMetadata['training_kpis'] ?? null) ? $llmMetadata['training_kpis'] : [],
+            'phase0_auto' => is_array($llmMetadata['phase0_auto'] ?? null) ? $llmMetadata['phase0_auto'] : [],
+            'phase0_rejected_reason' => (string) ($llmMetadata['phase0_rejected_reason'] ?? ''),
             'champion_active' => (bool) ($llmMetadata['champion_active'] ?? false),
             'champion_scope' => (string) ($llmMetadata['champion_scope'] ?? ''),
             'repair_depth' => (int) ($llmMetadata['repair_depth'] ?? 0),
