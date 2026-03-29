@@ -119,7 +119,10 @@ class EvolutionWorkerEngine:
             "models_evaluated": 3,
         }
         self.api.add_metric(run_id, model_id=f"gen_{generation}_summary", generation=generation, metrics=simulated_metric)
-        self._create_model_proposal_if_enabled(run_id, generation, simulated_metric)
+        if generation == 0:
+            self.api.add_event(run_id, "generation_baseline_ready", "Generació 0 reservada per models base o champions previs")
+        else:
+            self._create_model_proposal_if_enabled(run_id, generation, simulated_metric)
         self.api.add_artifact(
             run_id,
             artifact_type="checkpoint",
@@ -131,6 +134,54 @@ class EvolutionWorkerEngine:
         self.state.generation = generation + 1
         self.state.stage = "generation_completed"
         self._save_state()
+
+    def _generation_proposal_counts(self, run_id: str, generation: int) -> dict[str, int]:
+        active_statuses = {"draft", "queued_phase0", "validated_phase0", "accepted", "training"}
+        counts = {"total": 0, "active": 0, "training": 0, "trained": 0, "rejected": 0}
+        try:
+            proposals = self.api.list_model_proposals(limit=500)
+        except Exception:
+            return counts
+        for proposal in proposals:
+            if str(proposal.get("source_run_id", "")) != run_id:
+                continue
+            llm_metadata = proposal.get("llm_metadata") if isinstance(proposal.get("llm_metadata"), dict) else {}
+            proposal_generation = int(llm_metadata.get("from_generation", -1) or -1)
+            if proposal_generation != generation:
+                continue
+            counts["total"] += 1
+            status = str(proposal.get("status", ""))
+            if status in active_statuses:
+                counts["active"] += 1
+            if status == "training":
+                counts["training"] += 1
+            elif status == "trained":
+                counts["trained"] += 1
+            elif status == "rejected":
+                counts["rejected"] += 1
+        return counts
+
+    def _wait_for_generation_to_drain(self, run_id: str, generation: int, prefetch_generation: int | None = None) -> int | None:
+        timeout_seconds = max(60, int(os.getenv("V2_WAIT_FOR_GENERATION_DRAIN_SECONDS", "86400")))
+        poll_seconds = max(5, int(os.getenv("V2_WAIT_FOR_GENERATION_DRAIN_POLL_SECONDS", "10")))
+        started = time.time()
+        prefetched_generation: int | None = None
+        self.api.add_event(run_id, "generation_drain_wait_started", f"Esperant que la generació {generation} es buidi", {"generation": generation, "prefetch_generation": prefetch_generation})
+        while True:
+            self._send_heartbeat()
+            self._process_queued_proposals_phase0_if_enabled()
+            counts = self._generation_proposal_counts(run_id, generation)
+            if counts["total"] == 0 or counts["active"] == 0:
+                self.api.add_event(run_id, "generation_drain_wait_completed", f"Generació {generation} buidada", {"generation": generation, **counts})
+                return prefetched_generation
+            if prefetch_generation is not None and prefetched_generation is None and counts["training"] == 1 and counts["active"] == 1:
+                self.api.add_event(run_id, "generation_prefetch_started", f"Prefetch generació {prefetch_generation} mentre es tanca la {generation}", {"current_generation": generation, "prefetch_generation": prefetch_generation, **counts})
+                self._run_generation_step(prefetch_generation)
+                prefetched_generation = prefetch_generation
+            if time.time() - started > timeout_seconds:
+                self.api.add_event(run_id, "generation_drain_wait_timeout", f"Timeout esperant generació {generation}", {"generation": generation, **counts})
+                raise TimeoutError(f"generation {generation} did not drain for run {run_id}: {counts}")
+            time.sleep(poll_seconds)
 
     def _create_model_proposal_if_enabled(self, run_id: str, generation: int, metrics: dict[str, float | int]) -> None:
         if not self.config.llm_enabled:
@@ -579,14 +630,25 @@ class EvolutionWorkerEngine:
         self._process_queued_proposals_phase0_if_enabled()
         self.api.update_status(run_id, "running", self.state.generation)
         last_heartbeat = 0.0
-        while self.state.generation < self.config.max_generations:
+        if self.state.generation == 0:
+            self._run_generation_step(0)
+        next_generation = max(1, self.state.generation + 1)
+        prefetched_generation: int | None = None
+        while next_generation <= self.config.max_generations:
             now = time.time()
             if now - last_heartbeat >= self.config.heartbeat_interval_seconds:
                 self._send_heartbeat()
                 self._process_queued_proposals_phase0_if_enabled()
                 last_heartbeat = now
-            self._run_generation_step(self.state.generation)
+            current_generation = next_generation
+            if prefetched_generation == current_generation:
+                prefetched_generation = None
+            else:
+                self._run_generation_step(current_generation)
             self._process_queued_proposals_phase0_if_enabled()
+            prefetch_target = current_generation + 1 if current_generation < self.config.max_generations else None
+            prefetched_generation = self._wait_for_generation_to_drain(run_id, current_generation, prefetch_target)
+            next_generation = current_generation + 1
             time.sleep(1)
         self._process_queued_proposals_phase0_if_enabled()
         self._wait_for_training_queue_to_drain(run_id)
