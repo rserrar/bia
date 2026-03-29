@@ -333,6 +333,9 @@ def main() -> int:
                 client.complete_execution_request(request_id, result_summary=result)
             else:
                 client.fail_execution_request(request_id, error_summary=str(result.get("error", "execution_failed")), result_summary=result)
+            if bool(result.get("stop_worker_loop")) or str(result.get("fatal_error", "")) == "llm_rate_limited":
+                print("[worker-loop] stopping after LLM rate limit; wait before restarting Colab worker")
+                return 0
         except KeyboardInterrupt:
             return 0
         except Exception as error:

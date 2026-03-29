@@ -33,6 +33,10 @@ class LlmConfig:
     repair_on_validation_error: bool
 
 
+class LlmRateLimitError(RuntimeError):
+    pass
+
+
 class LlmProposalClient:
     def __init__(self, config: LlmConfig) -> None:
         self.config = config
@@ -201,6 +205,16 @@ class LlmProposalClient:
                     if error_code == "unsupported_parameter" and "max_tokens" in error_message and not use_max_completion_tokens:
                         use_max_completion_tokens = True
                         continue
+                    if response.status_code == 429 or error_code == "rate_limit_exceeded":
+                        self._log_openai_attempt(
+                            prompt_text=prompt_text,
+                            response_data=error_payload if isinstance(error_payload, dict) else {"raw_text": response.text[:2000]},
+                            error_message=f"rate_limit_status={response.status_code}",
+                            context=context,
+                            endpoint=attempt_endpoint,
+                            attempt=generation_attempt + 1,
+                        )
+                        raise LlmRateLimitError(f"OpenAI rate limit reached: {error_message or response.text[:500]}")
                     if response.status_code >= 500 and retries_for_server_error > 0:
                         self._log_openai_attempt(
                             prompt_text=prompt_text,

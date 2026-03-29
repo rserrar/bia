@@ -240,6 +240,14 @@ def main() -> int:
         trial_json = _extract_last_json_block(trial.stdout)
         run_id = str(trial_json.get("run_id", "")).strip()
         if run_id == "":
+            if bool(trial_json.get("stop_worker_loop")):
+                _emit_progress({
+                    "stage": "llm_rate_limited",
+                    "stage_label": "Rate limit de l'LLM; aturant worker de Colab",
+                    "stop_worker_loop": True,
+                    "fatal_error": "llm_rate_limited",
+                    "error": trial_json.get("error", "llm_rate_limited"),
+                })
             raise RuntimeError("run_id missing in LLM trial output")
         trial_expected_models = int(trial_json.get("expected_models_total", generations * models_per_generation) or (generations * models_per_generation))
         trial_created_models = int(trial_json.get("proposals_created", 0) or 0)

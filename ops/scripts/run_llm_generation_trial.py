@@ -115,6 +115,7 @@ def main() -> int:
         sys.path.insert(0, str(worker_src))
     from run_worker import main as run_worker_main
     from config import load_worker_config
+    from llm_client import LlmRateLimitError
 
     api_base_url = os.getenv("V2_API_BASE_URL", "").rstrip("/")
     api_token = os.getenv("V2_API_TOKEN", "")
@@ -184,7 +185,16 @@ def main() -> int:
     os.environ["V2_CHECKPOINT_PATH"] = str(checkpoint_path)
     print(f"[trial] checkpoint: {checkpoint_path}")
 
-    run_worker_main()
+    try:
+        run_worker_main()
+    except LlmRateLimitError as error:
+        print(json.dumps({
+            "ok": False,
+            "fatal_error": "llm_rate_limited",
+            "stop_worker_loop": True,
+            "error": str(error),
+        }, ensure_ascii=False, indent=2))
+        return 2
     print("[trial] worker finalitzat, comprovant resultats...")
 
     state = json.loads(checkpoint_path.read_text(encoding="utf-8"))

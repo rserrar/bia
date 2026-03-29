@@ -15,13 +15,13 @@ try:
     from .checkpoint_store import CheckpointStore
     from .config import WorkerConfig
     from .legacy_model_compat import build_legacy_model_once
-    from .llm_client import LlmConfig, LlmProposalClient
+    from .llm_client import LlmConfig, LlmProposalClient, LlmRateLimitError
 except ImportError:
     from api_client import ApiClient
     from checkpoint_store import CheckpointStore
     from config import WorkerConfig
     from legacy_model_compat import build_legacy_model_once
-    from llm_client import LlmConfig, LlmProposalClient
+    from llm_client import LlmConfig, LlmProposalClient, LlmRateLimitError
 
 
 @dataclass
@@ -203,6 +203,18 @@ class EvolutionWorkerEngine:
                         "candidates_expected": proposals_per_generation,
                     },
                 )
+            except LlmRateLimitError as error:
+                self.api.add_event(
+                    run_id,
+                    "llm_rate_limited",
+                    f"Rate limit LLM a generació {generation}",
+                    {
+                        "error": str(error),
+                        "candidate_index": candidate_index + 1,
+                        "candidates_expected": proposals_per_generation,
+                    },
+                )
+                raise
             except Exception as error:
                 self.api.add_event(
                     run_id,
