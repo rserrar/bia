@@ -53,6 +53,10 @@ class WorkerConfig:
     llm_endpoint: str
     llm_api_key: str
     llm_model: str
+    llm_fallback_provider: str
+    llm_fallback_endpoint: str
+    llm_fallback_api_key: str
+    llm_fallback_model: str
     llm_timeout_seconds: int
     llm_temperature: float
     llm_max_tokens: int
@@ -90,6 +94,8 @@ def load_worker_config() -> WorkerConfig:
         file_api_key = os.getenv(file_env_var, "").strip()
     file_provider = str(file_settings.get("llm_provider", file_settings.get("provider", ""))).strip()
     file_model = str(file_settings.get("openai_model_name", file_settings.get("model", ""))).strip()
+    file_fallback_provider = str(file_settings.get("llm_fallback_provider", "")).strip()
+    file_fallback_model = str(file_settings.get("llm_fallback_model", file_settings.get("fallback_model", ""))).strip()
     file_temperature = file_settings.get("temperature", 0.2)
     file_max_tokens = file_settings.get("max_tokens", 6000)
 
@@ -100,6 +106,13 @@ def load_worker_config() -> WorkerConfig:
         parts = [part.strip() for part in cleaned_endpoint.split(",") if part.strip() != ""]
         if len(parts) > 0:
             cleaned_endpoint = parts[0]
+    raw_fallback_endpoint = os.getenv("V2_LLM_FALLBACK_ENDPOINT", "")
+    cleaned_fallback_endpoint = raw_fallback_endpoint.strip().replace("`", "").strip().strip("'").strip('"').strip()
+    cleaned_fallback_endpoint = cleaned_fallback_endpoint.rstrip(",").strip()
+    if "," in cleaned_fallback_endpoint and cleaned_fallback_endpoint.startswith("http"):
+        parts = [part.strip() for part in cleaned_fallback_endpoint.split(",") if part.strip() != ""]
+        if len(parts) > 0:
+            cleaned_fallback_endpoint = parts[0]
 
     return WorkerConfig(
         api_timeout_seconds=int(os.getenv("V2_API_TIMEOUT_SECONDS", "20")),
@@ -125,6 +138,10 @@ def load_worker_config() -> WorkerConfig:
         llm_endpoint=cleaned_endpoint,
         llm_api_key=os.getenv("V2_LLM_API_KEY", file_api_key),
         llm_model=os.getenv("V2_LLM_MODEL", file_model or "gpt-5.4"),
+        llm_fallback_provider=os.getenv("V2_LLM_FALLBACK_PROVIDER", file_fallback_provider),
+        llm_fallback_endpoint=cleaned_fallback_endpoint,
+        llm_fallback_api_key=os.getenv("V2_LLM_FALLBACK_API_KEY", os.getenv("GEMINI_API_KEY", "")),
+        llm_fallback_model=os.getenv("V2_LLM_FALLBACK_MODEL", file_fallback_model or "gemini-2.0-flash"),
         llm_timeout_seconds=int(os.getenv("V2_LLM_TIMEOUT_SECONDS", "90")),
         llm_temperature=float(os.getenv("V2_LLM_TEMPERATURE", str(file_temperature))),
         llm_max_tokens=int(os.getenv("V2_LLM_MAX_TOKENS", str(file_max_tokens))),

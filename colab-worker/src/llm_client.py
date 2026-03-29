@@ -20,6 +20,10 @@ class LlmConfig:
     endpoint: str
     api_key: str
     model: str
+    fallback_provider: str
+    fallback_endpoint: str
+    fallback_api_key: str
+    fallback_model: str
     timeout_seconds: int
     temperature: float
     max_tokens: int
@@ -70,7 +74,27 @@ class LlmProposalClient:
                     "raw_response": {"mode": "mock"},
                 },
             }
-        return self._generate_openai_compatible(context)
+        try:
+            return self._generate_openai_compatible(
+                context,
+                provider_label=self.config.provider,
+                endpoint_override=self.config.endpoint,
+                api_key_override=self.config.api_key,
+                model_override=self.config.model,
+            )
+        except LlmRateLimitError:
+            fallback_endpoint = self.config.fallback_endpoint.strip()
+            fallback_api_key = self.config.fallback_api_key.strip()
+            fallback_model = self.config.fallback_model.strip()
+            if fallback_endpoint == "" or fallback_api_key == "" or fallback_model == "":
+                raise
+            return self._generate_openai_compatible(
+                context,
+                provider_label=self.config.fallback_provider.strip() or "gemini_fallback",
+                endpoint_override=fallback_endpoint,
+                api_key_override=fallback_api_key,
+                model_override=fallback_model,
+            )
 
     def _generate_with_legacy_interface(self, context: dict[str, Any]) -> dict[str, Any] | None:
         from shared.clients.llm_interface import ask_openai  # type: ignore[import]
@@ -120,12 +144,19 @@ class LlmProposalClient:
         self._attach_prompt_audit_metadata(candidate, context, prompt_text)
         return candidate
 
-    def _generate_openai_compatible(self, context: dict[str, Any]) -> dict[str, Any]:
-        if self.config.endpoint.strip() == "":
+    def _generate_openai_compatible(
+        self,
+        context: dict[str, Any],
+        provider_label: str,
+        endpoint_override: str,
+        api_key_override: str,
+        model_override: str,
+    ) -> dict[str, Any]:
+        if endpoint_override.strip() == "":
             raise RuntimeError("LLM endpoint not configured")
-        if self.config.api_key.strip() == "":
+        if api_key_override.strip() == "":
             raise RuntimeError("LLM api key not configured")
-        endpoint = self._resolve_endpoint(self.config.endpoint)
+        endpoint = self._resolve_endpoint(endpoint_override)
         try:
             from v2_prompt_builder import V2PromptBuilder
             repo_root = Path(__file__).resolve().parents[2]
@@ -160,12 +191,12 @@ class LlmProposalClient:
             data = {}
             content = ""
             for _ in range(4):
-                payload = self._build_payload(attempt_endpoint, prompt_text, use_max_completion_tokens, max_tokens_override)
+                payload = self._build_payload(attempt_endpoint, prompt_text, use_max_completion_tokens, max_tokens_override, model_override)
                 try:
                     response = requests.post(
                         attempt_endpoint,
                         headers={
-                            "Authorization": f"Bearer {self.config.api_key}",
+                            "Authorization": f"Bearer {api_key_override}",
                             "Content-Type": "application/json",
                         },
                         json=payload,
@@ -252,7 +283,7 @@ class LlmProposalClient:
                 try:
                     extracted = self._extract_first_json_payload(content)
                     parsed = json.loads(extracted)
-                    candidate = self._normalize_candidate_response(parsed, provider=self.config.provider)
+                    candidate = self._normalize_candidate_response(parsed, provider=provider_label)
                     try:
                         candidate = self._validate_candidate(candidate)
                     except Exception as validation_error:
@@ -368,19 +399,21 @@ class LlmProposalClient:
         prompt_text: str,
         use_max_completion_tokens: bool,
         max_tokens_override: int | None = None,
+        model_override: str | None = None,
     ) -> dict[str, Any]:
         max_tokens_value = max_tokens_override if isinstance(max_tokens_override, int) and max_tokens_override > 0 else self.config.max_tokens
         max_tokens_key = "max_completion_tokens" if use_max_completion_tokens else "max_tokens"
+        model_name = model_override if isinstance(model_override, str) and model_override.strip() != "" else self.config.model
         if endpoint.endswith("/completions") and not endpoint.endswith("/chat/completions"):
             payload = {
-                "model": self.config.model,
+                "model": model_name,
                 "prompt": f"{self.config.system_prompt}\n\n{prompt_text}",
                 "temperature": self.config.temperature,
                 max_tokens_key: max_tokens_value,
             }
             return payload
         payload = {
-            "model": self.config.model,
+            "model": model_name,
             "messages": [
                 {"role": "system", "content": self.config.system_prompt},
                 {"role": "user", "content": prompt_text},
