@@ -75,6 +75,7 @@ def _run_command_with_progress(
     summary.setdefault("stage", "starting")
     summary.setdefault("stage_label", "Inicialitzant execució")
     last_heartbeat = 0.0
+    echo_child_logs = os.environ.get("V2_WORKER_LOOP_QUIET_CHILDREN", "false").lower() not in {"1", "true", "yes"}
 
     def _reader() -> None:
         try:
@@ -154,6 +155,8 @@ def _run_command_with_progress(
         if item is None:
             break
         collected_lines.append(item)
+        if echo_child_logs:
+            print(item, end="")
         progress_update = _progress_from_line(item)
         if progress_update is not None:
             _merge_summary(progress_update)
