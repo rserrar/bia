@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sys
 import time
@@ -1114,18 +1115,53 @@ class LlmProposalClient:
                                 layer["type"] = self._normalize_layer_type(layer_type)
 
     def _normalize_training_config(self, model_definition: dict[str, Any]) -> None:
+        architecture_raw = model_definition.get("architecture_definition")
+        architecture = architecture_raw if isinstance(architecture_raw, dict) else {}
+        experiment = self._read_json(self.config.experiment_config_file)
+        allowed_targets: set[str] = set()
+        for item in experiment.get("output_targets_config", []):
+            if not isinstance(item, dict):
+                continue
+            target_name = str(item.get("target_name", "")).strip()
+            default_layer = str(item.get("default_output_layer_name", "")).strip()
+            if target_name:
+                allowed_targets.add(target_name)
+                allowed_targets.add(f"output_{target_name}")
+            if default_layer:
+                allowed_targets.add(default_layer)
+
+        output_heads_raw = architecture.get("output_heads")
+        if isinstance(output_heads_raw, list) and allowed_targets:
+            filtered_heads: list[dict[str, Any]] = []
+            for head in output_heads_raw:
+                if not isinstance(head, dict):
+                    continue
+                layer_name = str(head.get("output_layer_name", "")).strip()
+                mapped_target = str(head.get("maps_to_target_config_name", "")).strip()
+                if (layer_name and layer_name in allowed_targets) or (mapped_target and (mapped_target in allowed_targets or f"output_{mapped_target}" in allowed_targets)):
+                    filtered_heads.append(head)
+            if filtered_heads:
+                architecture["output_heads"] = filtered_heads
+
         training_config = model_definition.get("training_config")
         if not isinstance(training_config, dict):
             return
         compile_config = training_config.get("compile")
         if not isinstance(compile_config, dict):
             return
-        output_heads = model_definition.get("architecture_definition", {}).get("output_heads", [])
+        output_heads = architecture.get("output_heads", [])
         valid_output_names = {
             str(head.get("output_layer_name", "")).strip()
             for head in output_heads
             if isinstance(head, dict) and str(head.get("output_layer_name", "")).strip() != ""
         }
+        loss_cfg = compile_config.get("loss")
+        if isinstance(loss_cfg, dict) and valid_output_names:
+            compile_config["loss"] = {
+                str(key): value
+                for key, value in loss_cfg.items()
+                if str(key).strip() in valid_output_names
+            }
         loss_weights = compile_config.get("loss_weights")
         if isinstance(loss_weights, dict) and valid_output_names:
             filtered = {
@@ -1134,6 +1170,13 @@ class LlmProposalClient:
                 if str(key).strip() in valid_output_names
             }
             compile_config["loss_weights"] = filtered
+        metrics_cfg = compile_config.get("metrics")
+        if isinstance(metrics_cfg, dict) and valid_output_names:
+            compile_config["metrics"] = {
+                str(key): value
+                for key, value in metrics_cfg.items()
+                if str(key).strip() in valid_output_names
+            }
 
     def _normalize_layer_type(self, layer_type: str) -> str:
         normalized = layer_type.strip()
@@ -1177,3 +1220,7 @@ class LlmProposalClient:
         if explicit != "":
             return [explicit]
         return []
+
+    def proposal_fingerprint(self, proposal: dict[str, Any]) -> str:
+        canonical = json.dumps(proposal, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

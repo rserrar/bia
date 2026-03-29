@@ -31,6 +31,7 @@ class V2PromptBuilder:
         outputs_desc = self._outputs_description(experiment)
         reference_models = self._reference_models_for_prompt(context)
         genealogy = self._genealogy_for_prompt(context)
+        recent_generated = self._recent_generated_models_for_prompt(context)
 
         prompt = template
         prompt = prompt.replace("{{num_new_models}}", str(self.num_new_models))
@@ -40,6 +41,7 @@ class V2PromptBuilder:
         prompt = prompt.replace("{{best_performing_models_json}}", json.dumps(reference_models, ensure_ascii=False, indent=2))
         prompt = prompt.replace("{{architecture_guide_content}}", self._combined_architecture_guide(architecture_guide))
         prompt = prompt.replace("{{genealogy_case_studies}}", genealogy)
+        prompt += "\n\n### MODELS RECENTS A EVITAR DUPLICAR\n" + recent_generated
         return prompt
 
     def _resolve_path(self, file_path: str) -> Path:
@@ -175,4 +177,19 @@ class V2PromptBuilder:
                 ref_id = str(reference.get("model_id", reference.get("proposal_id", f"reference_{idx}")))
                 ref_metrics = reference.get("last_evaluation_metrics") if isinstance(reference.get("last_evaluation_metrics"), dict) else {}
                 lines.append(f"  * {ref_id}: {json.dumps(ref_metrics, ensure_ascii=False)}")
+        return "\n".join(lines)
+
+    def _recent_generated_models_for_prompt(self, context: dict[str, Any]) -> str:
+        recent = context.get("recent_generated_models")
+        if not isinstance(recent, list) or len(recent) == 0:
+            return "- No hi ha models recents registrats per evitar duplicats."
+        lines = [
+            "No repeteixis exactament aquestes arquitectures ni canvis trivials molt semblants. Si reutilitzes una idea, canvia clarament la fusió, les branques, els output heads o la configuració de training.",
+        ]
+        for item in recent[:5]:
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                f"- proposal_id={item.get('proposal_id', 'n/a')} · fingerprint={item.get('fingerprint', '')[:12]} · summary={item.get('summary', '')}"
+            )
         return "\n".join(lines)

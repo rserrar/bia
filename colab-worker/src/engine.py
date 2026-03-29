@@ -138,6 +138,7 @@ class EvolutionWorkerEngine:
         min_interval = max(0, int(self.config.llm_min_interval_seconds))
         proposals_per_generation = max(1, int(self.config.llm_num_new_models))
         reference_models, reference_trace = self._collect_reference_models_for_prompt(run_id)
+        recent_generated_models = self._collect_recent_generated_models(run_id)
 
         for candidate_index in range(proposals_per_generation):
             if min_interval > 0 and self.last_llm_call_ts > 0:
@@ -152,6 +153,7 @@ class EvolutionWorkerEngine:
                 "code_version": self.config.code_version,
                 "reference_models": reference_models,
                 "reference_selection_trace": reference_trace,
+                "recent_generated_models": recent_generated_models,
                 "candidate_index": candidate_index + 1,
                 "candidates_expected": proposals_per_generation,
             }
@@ -174,6 +176,21 @@ class EvolutionWorkerEngine:
                 llm_metadata_payload["from_generation"] = generation
                 llm_metadata_payload["candidate_index"] = candidate_index + 1
                 llm_metadata_payload["candidates_expected"] = proposals_per_generation
+                proposal_fingerprint = self.llm.proposal_fingerprint(proposal)
+                llm_metadata_payload["proposal_fingerprint"] = proposal_fingerprint
+
+                if self._proposal_fingerprint_exists(run_id, proposal_fingerprint):
+                    self.api.add_event(
+                        run_id,
+                        "llm_duplicate_skipped",
+                        f"Proposta duplicada descartada a generació {generation}",
+                        {
+                            "proposal_fingerprint": proposal_fingerprint,
+                            "candidate_index": candidate_index + 1,
+                            "candidates_expected": proposals_per_generation,
+                        },
+                    )
+                    continue
 
                 raw_response = llm_metadata_payload.get("raw_response", {})
                 if isinstance(raw_response, dict):
@@ -196,6 +213,12 @@ class EvolutionWorkerEngine:
                 proposal_id = str(created.get("proposal_id", ""))
                 if proposal_id != "":
                     self.api.enqueue_model_proposal_phase0(proposal_id)
+                    recent_generated_models.insert(0, {
+                        "proposal_id": proposal_id,
+                        "fingerprint": proposal_fingerprint,
+                        "summary": self._summarize_model_definition(proposal),
+                    })
+                    recent_generated_models = recent_generated_models[:5]
                 self.api.add_event(
                     run_id,
                     "llm_proposal_created",
@@ -314,6 +337,61 @@ class EvolutionWorkerEngine:
             "rejected": rejected_trace[:10],
             "fallback_used": False,
         }
+
+    def _collect_recent_generated_models(self, run_id: str) -> list[dict[str, str]]:
+        recent: list[dict[str, str]] = []
+        try:
+            proposals = self.api.list_model_proposals(limit=200)
+        except Exception:
+            return recent
+        for proposal in proposals:
+            if str(proposal.get("source_run_id", "")) != run_id:
+                continue
+            llm_metadata = proposal.get("llm_metadata") if isinstance(proposal.get("llm_metadata"), dict) else {}
+            fingerprint = str(llm_metadata.get("proposal_fingerprint", "")).strip()
+            if fingerprint == "":
+                continue
+            recent.append({
+                "proposal_id": str(proposal.get("proposal_id", "")),
+                "fingerprint": fingerprint,
+                "summary": self._summarize_model_definition(proposal.get("proposal") if isinstance(proposal.get("proposal"), dict) else {}),
+            })
+        return recent[:5]
+
+    def _proposal_fingerprint_exists(self, run_id: str, fingerprint: str) -> bool:
+        try:
+            proposals = self.api.list_model_proposals(limit=300)
+        except Exception:
+            return False
+        for proposal in proposals:
+            if str(proposal.get("source_run_id", "")) != run_id:
+                continue
+            llm_metadata = proposal.get("llm_metadata") if isinstance(proposal.get("llm_metadata"), dict) else {}
+            if str(llm_metadata.get("proposal_fingerprint", "")) == fingerprint:
+                return True
+        return False
+
+    def _summarize_model_definition(self, proposal: dict[str, object]) -> str:
+        model_definition = proposal.get("model_definition") if isinstance(proposal, dict) else None
+        if not isinstance(model_definition, dict):
+            return "unknown"
+        architecture = model_definition.get("architecture_definition") if isinstance(model_definition.get("architecture_definition"), dict) else {}
+        branches = architecture.get("branches") if isinstance(architecture.get("branches"), list) else []
+        merges = architecture.get("merges") if isinstance(architecture.get("merges"), list) else []
+        output_heads = architecture.get("output_heads") if isinstance(architecture.get("output_heads"), list) else []
+        branch_types: list[str] = []
+        for branch in branches[:3]:
+            if not isinstance(branch, dict):
+                continue
+            layers = branch.get("layers") if isinstance(branch.get("layers"), list) else []
+            first_type = ""
+            for layer in layers:
+                if isinstance(layer, dict) and isinstance(layer.get("type"), str):
+                    first_type = str(layer.get("type"))
+                    break
+            if first_type:
+                branch_types.append(first_type)
+        return f"branches={len(branches)}({','.join(branch_types)}) merges={len(merges)} outputs={len(output_heads)}"
 
     def _load_reference_models_from_file(self, max_refs: int) -> list[dict[str, object]]:
         path_str = os.getenv("V2_PROMPT_REFERENCE_MODEL_PATH", "models/base/model_exemple_complex_v1.json").strip()
