@@ -75,7 +75,7 @@ class LlmProposalClient:
                 },
             }
         try:
-            return self._generate_openai_compatible(
+            return self._generate_with_provider(
                 context,
                 provider_label=self.config.provider,
                 endpoint_override=self.config.endpoint,
@@ -86,15 +86,41 @@ class LlmProposalClient:
             fallback_endpoint = self.config.fallback_endpoint.strip()
             fallback_api_key = self.config.fallback_api_key.strip()
             fallback_model = self.config.fallback_model.strip()
-            if fallback_endpoint == "" or fallback_api_key == "" or fallback_model == "":
+            fallback_provider = self.config.fallback_provider.strip() or "gemini"
+            if fallback_api_key == "" or fallback_model == "":
                 raise
-            return self._generate_openai_compatible(
+            return self._generate_with_provider(
                 context,
-                provider_label=self.config.fallback_provider.strip() or "gemini_fallback",
+                provider_label=fallback_provider,
                 endpoint_override=fallback_endpoint,
                 api_key_override=fallback_api_key,
                 model_override=fallback_model,
             )
+
+    def _generate_with_provider(
+        self,
+        context: dict[str, Any],
+        provider_label: str,
+        endpoint_override: str,
+        api_key_override: str,
+        model_override: str,
+    ) -> dict[str, Any]:
+        normalized_provider = provider_label.strip().lower()
+        if "gemini" in normalized_provider:
+            return self._generate_gemini_native(
+                context,
+                provider_label=provider_label,
+                endpoint_override=endpoint_override,
+                api_key_override=api_key_override,
+                model_override=model_override,
+            )
+        return self._generate_openai_compatible(
+            context,
+            provider_label=provider_label,
+            endpoint_override=endpoint_override,
+            api_key_override=api_key_override,
+            model_override=model_override,
+        )
 
     def _generate_with_legacy_interface(self, context: dict[str, Any]) -> dict[str, Any] | None:
         from shared.clients.llm_interface import ask_openai  # type: ignore[import]
@@ -326,6 +352,90 @@ class LlmProposalClient:
             raise RuntimeError(f"OpenAI generation failed after retries: {last_error}") from last_error
         raise RuntimeError("OpenAI generation failed without candidate after retries")
 
+    def _generate_gemini_native(
+        self,
+        context: dict[str, Any],
+        provider_label: str,
+        endpoint_override: str,
+        api_key_override: str,
+        model_override: str,
+    ) -> dict[str, Any]:
+        if api_key_override.strip() == "":
+            raise RuntimeError("Gemini api key not configured")
+        endpoint = self._resolve_gemini_endpoint(endpoint_override, model_override)
+        try:
+            from v2_prompt_builder import V2PromptBuilder
+            repo_root = Path(__file__).resolve().parents[2]
+            prompt_builder = V2PromptBuilder(
+                repo_root=repo_root,
+                prompt_template_file=self.config.prompt_template_file,
+                architecture_guide_file=self.config.architecture_guide_file,
+                experiment_config_file=self.config.experiment_config_file,
+                num_new_models=self.config.num_new_models,
+                num_reference_models=self.config.num_reference_models,
+            )
+            prompt_text = prompt_builder.build_prompt(context)
+        except Exception:
+            prompt_text = json.dumps(context, ensure_ascii=False)
+
+        payload = {
+            "system_instruction": {
+                "parts": [{"text": self.config.system_prompt}],
+            },
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": prompt_text}],
+                }
+            ],
+            "generationConfig": {
+                "temperature": self.config.temperature,
+                "maxOutputTokens": int(self.config.max_tokens),
+            },
+        }
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                response = requests.post(
+                    endpoint,
+                    params={"key": api_key_override},
+                    headers={"Content-Type": "application/json"},
+                    json=payload,
+                    timeout=self.config.timeout_seconds,
+                )
+            except requests.RequestException as error:
+                last_error = error
+                time.sleep(4 + attempt)
+                continue
+
+            if response.status_code == 429:
+                body_preview = response.text[:500]
+                raise LlmRateLimitError(f"Gemini rate limit reached: {body_preview}")
+            if response.status_code >= 500 and attempt < 2:
+                last_error = RuntimeError(f"Gemini server error {response.status_code}: {response.text[:500]}")
+                time.sleep(3 + attempt)
+                continue
+            response.raise_for_status()
+            data = response.json()
+            content = self._extract_content_from_gemini_response(data)
+            if content.strip() == "":
+                last_error = RuntimeError(f"Gemini response content is empty: {json.dumps(data, ensure_ascii=False)[:1200]}")
+                continue
+            extracted = self._extract_first_json_payload(content)
+            parsed = json.loads(extracted)
+            candidate = self._normalize_candidate_response(parsed, provider=provider_label)
+            candidate = self._validate_candidate(candidate)
+            metadata = candidate.get("llm_metadata")
+            metadata_payload = metadata if isinstance(metadata, dict) else {}
+            metadata_payload["raw_response"] = data
+            candidate["llm_metadata"] = metadata_payload
+            self._attach_prompt_audit_metadata(candidate, context, prompt_text)
+            return candidate
+
+        if last_error is not None:
+            raise RuntimeError(f"Gemini generation failed after retries: {last_error}") from last_error
+        raise RuntimeError("Gemini generation failed without candidate after retries")
+
     def _log_openai_attempt(
         self,
         prompt_text: str,
@@ -467,6 +577,38 @@ class LlmProposalClient:
         if trimmed.endswith("/chat/completions"):
             return trimmed
         return f"{trimmed}/chat/completions"
+
+    def _resolve_gemini_endpoint(self, endpoint: str, model: str) -> str:
+        trimmed = endpoint.strip().rstrip("/")
+        if trimmed == "":
+            trimmed = "https://generativelanguage.googleapis.com/v1beta/models"
+        if ":generateContent" in trimmed:
+            return trimmed
+        if trimmed.endswith("/models"):
+            return f"{trimmed}/{model}:generateContent"
+        if trimmed.endswith("/models/"):
+            return f"{trimmed}{model}:generateContent"
+        if "/models/" in trimmed and not trimmed.endswith(model):
+            return f"{trimmed}/{model}:generateContent"
+        if trimmed.endswith(model):
+            return f"{trimmed}:generateContent"
+        return f"{trimmed}/models/{model}:generateContent"
+
+    def _extract_content_from_gemini_response(self, data: dict[str, Any]) -> str:
+        candidates = data.get("candidates")
+        first_candidate = candidates[0] if isinstance(candidates, list) and len(candidates) > 0 and isinstance(candidates[0], dict) else {}
+        content = first_candidate.get("content")
+        if isinstance(content, dict):
+            parts = content.get("parts")
+            if isinstance(parts, list):
+                texts: list[str] = []
+                for item in parts:
+                    if isinstance(item, dict) and isinstance(item.get("text"), str):
+                        texts.append(str(item.get("text")))
+                joined = "\n".join([text for text in texts if text.strip() != ""]).strip()
+                if joined != "":
+                    return joined
+        return ""
 
     def _extract_first_json_payload(self, text: str) -> str:
         object_start = text.find("{")
