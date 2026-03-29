@@ -151,6 +151,7 @@ class LlmProposalClient:
             attempt_endpoint = endpoint
             use_max_completion_tokens = False
             retries_for_server_error = 2
+            retries_for_request_error = 2
             max_tokens_override: int | None = None
             data = {}
             content = ""
@@ -176,6 +177,10 @@ class LlmProposalClient:
                         attempt=generation_attempt + 1,
                     )
                     last_error = error
+                    if retries_for_request_error > 0:
+                        retries_for_request_error -= 1
+                        time.sleep(5 + generation_attempt)
+                        continue
                     if generation_attempt < 2:
                         time.sleep(2 + generation_attempt)
                         break
@@ -316,13 +321,16 @@ class LlmProposalClient:
             return
 
     def _attach_prompt_audit_metadata(self, candidate: dict[str, Any], context: dict[str, Any], prompt_text: str) -> None:
-        metadata = candidate.get("llm_metadata")
-        metadata_payload = metadata if isinstance(metadata, dict) else {}
+        metadata_raw = candidate.get("llm_metadata")
+        metadata_payload = metadata_raw if isinstance(metadata_raw, dict) else {}
         references = context.get("reference_models")
         ref_count = len([item for item in references if isinstance(item, dict)]) if isinstance(references, list) else 0
-        latest_metrics = context.get("latest_metrics") if isinstance(context.get("latest_metrics"), dict) else {}
-        selection_trace = context.get("reference_selection_trace") if isinstance(context.get("reference_selection_trace"), dict) else {}
-        selected_refs = selection_trace.get("selected", []) if isinstance(selection_trace.get("selected", []), list) else []
+        latest_metrics_raw = context.get("latest_metrics")
+        latest_metrics = latest_metrics_raw if isinstance(latest_metrics_raw, dict) else {}
+        selection_trace_raw = context.get("reference_selection_trace")
+        selection_trace = selection_trace_raw if isinstance(selection_trace_raw, dict) else {}
+        selected_raw = selection_trace.get("selected")
+        selected_refs = selected_raw if isinstance(selected_raw, list) else []
         policy_version = str(selection_trace.get("policy_version", "selection_policy_v1"))
         metadata_payload["prompt_audit"] = {
             "generation": int(context.get("generation", 0)),

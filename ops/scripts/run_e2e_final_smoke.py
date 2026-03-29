@@ -127,6 +127,7 @@ def _poll_until_trained(
         artifact_type = str(latest_artifact.get("artifact_type", ""))
         event_type = str(latest_event.get("event_type", ""))
         artifact_ok = artifact_type in {"trained_model", "champion_model"}
+        run_completed_ok = str(run_payload.get("status", "")) == "completed"
         terminal_event_types = {"model_training_completed", "champion_selected", "champion_kept", "champion_selection_skipped"}
         timeline_items = timeline_payload.get("timeline", []) if isinstance(timeline_payload, dict) else []
         terminal_event_seen = any(
@@ -164,7 +165,8 @@ def _poll_until_trained(
 
         all_expected_generated = len(proposals) >= expected_models_total
         all_models_terminal = len(terminal) >= expected_models_total and len(active) == 0
-        if proposal_meta_ok and artifact_ok and event_ok and all_expected_generated and all_models_terminal:
+        success_ready = proposal_meta_ok and all_expected_generated and all_models_terminal and ((artifact_ok and event_ok) or run_completed_ok)
+        if success_ready:
             return {
                 "trained_proposal": selected_proposal or (trained[0] if trained else {}),
                 "summary": summary,

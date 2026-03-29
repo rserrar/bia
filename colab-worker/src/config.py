@@ -125,7 +125,7 @@ def load_worker_config() -> WorkerConfig:
         llm_endpoint=cleaned_endpoint,
         llm_api_key=os.getenv("V2_LLM_API_KEY", file_api_key),
         llm_model=os.getenv("V2_LLM_MODEL", file_model or "gpt-5.4"),
-        llm_timeout_seconds=int(os.getenv("V2_LLM_TIMEOUT_SECONDS", "45")),
+        llm_timeout_seconds=int(os.getenv("V2_LLM_TIMEOUT_SECONDS", "90")),
         llm_temperature=float(os.getenv("V2_LLM_TEMPERATURE", str(file_temperature))),
         llm_max_tokens=int(os.getenv("V2_LLM_MAX_TOKENS", str(file_max_tokens))),
         llm_system_prompt=os.getenv(
