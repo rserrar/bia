@@ -6,7 +6,27 @@ Guia de notebook per prova real:
 
 - `COLAB_NOTEBOOK_PLAN.md`
 - `V2_runtime_ready_colab.ipynb`
+- `V2_drive_zip_control_plane_colab.ipynb`
 - Config de validació Fase 0: `../ops/configs/phase0_model_validation.json`
+
+## Notebook nou per dataset gran des de Drive
+
+Per a proves mes serioses amb dataset comprimit a Drive, fes servir:
+
+- `V2_drive_zip_control_plane_colab.ipynb`
+
+Pensat per al ZIP:
+
+- `/content/drive/MyDrive/b-ia/dades/borsa_min.zip`
+
+Aquest notebook:
+
+- munta Drive i actualitza el repo
+- extreu el ZIP dins `V2/data/runtime_drive/`
+- detecta automàticament la carpeta que conté tots els CSV requerits
+- genera un `experiment_config.drive_runtime.json` apuntant al dataset extret
+- configura l'entorn per al control plane server-driven
+- arrenca `run_worker_loop.py`
 
 ## Layout de dades per al worker
 
