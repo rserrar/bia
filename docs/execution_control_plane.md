@@ -131,6 +131,26 @@ Retorna una vista compacta per operacio amb:
 - extracte curt de logs rellevants
 - runs associats amb `summary`, `timeline`, `references`, `proposals` i `artifacts`
 
+## Repair loop
+
+Quan una proposal falla per un error reparable, la V2 intenta mantenir viu el cicle:
+
+- primer prova una reparacio LLM del model fallit
+- si la reparacio falla, prova un reempla\u00e7 nou
+- el resultat es reenvia a `phase0`
+
+Metadades utiles per a genealogia i observabilitat:
+
+- `repaired_from_proposal_id`
+- `repair_mode`
+- `repair_attempt`
+- `repair_source_error`
+
+Objectiu operatiu:
+
+- evitar que una proposal dolenta consumeixi un slot sense reempla\u00e7
+- mantenir sempre feina potencial a la cua mentre hi hagi marge per corregir o regenerar
+
 ## Reclaim policy
 
 Una request `claimed` o `running` amb `heartbeat_at` stale pot tornar a ser elegible.

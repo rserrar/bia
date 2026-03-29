@@ -131,6 +131,24 @@ function executionReferenceSummary(array $resultSummary): string
     return $referenceId . ' · ' . $reason;
 }
 
+function executionRepairSummary(array $resultSummary): string
+{
+    $proposalId = (string) ($resultSummary['proposal_id'] ?? '');
+    if ($proposalId === '') {
+        return '';
+    }
+    $repairFrom = (string) ($resultSummary['repaired_from_proposal_id'] ?? '');
+    $repairMode = (string) ($resultSummary['repair_mode'] ?? '');
+    if ($repairFrom === '') {
+        return '';
+    }
+    $label = 'reparat de ' . $repairFrom;
+    if ($repairMode !== '') {
+        $label .= ' · ' . $repairMode;
+    }
+    return $label;
+}
+
 function requestTypeExplanation(string $requestType): string
 {
     return match ($requestType) {
@@ -1014,6 +1032,7 @@ try {
                 <?php $requestRunIds = is_array($request['run_ids'] ?? null) ? $request['run_ids'] : []; ?>
                 <?php $requestResultSummary = is_array($request['result_summary'] ?? null) ? $request['result_summary'] : []; ?>
                 <?php $championEventType = (string) ($requestResultSummary['latest_event_type'] ?? ''); ?>
+                <?php $repairSummary = executionRepairSummary($requestResultSummary); ?>
                 <?php $estimatedMinutes = estimateExecutionDurationMinutes($requestConfig); ?>
                 <?php $elapsedLabel = formatDurationShort($request['elapsed_seconds'] ?? null); ?>
                 <?php $alertBadges = requestAlertBadges($request); ?>
@@ -1046,9 +1065,10 @@ try {
                                 </div>
                                 <div class="kpi">run_ids: <span class="mono"><?php echo htmlspecialchars(implode(', ', array_map('strval', $requestRunIds)), ENT_QUOTES, 'UTF-8'); ?></span></div>
                                 <div class="kpi">proposal final: <span class="mono"><?php echo htmlspecialchars((string) ($requestResultSummary['proposal_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span></div>
+                                <?php if ($repairSummary !== ''): ?><div class="kpi"><?php echo htmlspecialchars($repairSummary, ENT_QUOTES, 'UTF-8'); ?></div><?php endif; ?>
                             </div>
                         <?php else: ?>
-                            <?php echo htmlspecialchars(championOutcomeExplanation($championEventType), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi mono"><?php echo htmlspecialchars((string) ($requestResultSummary['proposal_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span>
+                            <?php echo htmlspecialchars(championOutcomeExplanation($championEventType), ENT_QUOTES, 'UTF-8'); ?><br><span class="kpi mono"><?php echo htmlspecialchars((string) ($requestResultSummary['proposal_id'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span><?php if ($repairSummary !== ''): ?><br><span class="kpi"><?php echo htmlspecialchars($repairSummary, ENT_QUOTES, 'UTF-8'); ?></span><?php endif; ?>
                         <?php endif; ?>
                         <details><summary>Veure</summary><pre style="font-size:11px; margin:0; background:#1e293b; padding:4px; overflow-x:auto;"><?php echo htmlspecialchars(json_encode($requestResultSummary, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), ENT_QUOTES, 'UTF-8'); ?></pre></details>
                     </td>

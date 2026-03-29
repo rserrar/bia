@@ -1649,6 +1649,11 @@ final class ApiService
             'training_kpis' => is_array($llmMetadata['training_kpis'] ?? null) ? $llmMetadata['training_kpis'] : [],
             'champion_active' => (bool) ($llmMetadata['champion_active'] ?? false),
             'champion_scope' => (string) ($llmMetadata['champion_scope'] ?? ''),
+            'repair_depth' => (int) ($llmMetadata['repair_depth'] ?? 0),
+            'repaired_from_proposal_id' => (string) ($llmMetadata['repaired_from_proposal_id'] ?? ''),
+            'repair_mode' => (string) ($llmMetadata['repair_mode'] ?? ''),
+            'repair_attempt' => (int) ($llmMetadata['repair_attempt'] ?? 0),
+            'repair_source_error' => (string) ($llmMetadata['repair_source_error'] ?? ''),
         ];
     }
 
