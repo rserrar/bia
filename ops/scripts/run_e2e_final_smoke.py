@@ -76,6 +76,24 @@ def _emit_progress(payload: dict[str, Any]) -> None:
     print(json.dumps({"progress_event": True, **payload}, ensure_ascii=False), flush=True)
 
 
+def _run_and_stream(command: list[str], cwd: Path, env: dict[str, str]) -> tuple[int, str]:
+    proc = subprocess.Popen(
+        command,
+        cwd=str(cwd),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    assert proc.stdout is not None
+    lines: list[str] = []
+    for line in proc.stdout:
+        lines.append(line)
+        print(line, end="")
+    return proc.wait(), "".join(lines)
+
+
 def _poll_until_trained(
     api_base_url: str,
     token: str,
@@ -227,17 +245,12 @@ def main() -> int:
         "models_per_generation": models_per_generation,
     })
     try:
-        trial = subprocess.run(
+        trial_rc, trial_stdout = _run_and_stream(
             [sys.executable, str(repo / "ops" / "scripts" / "run_llm_generation_trial.py")],
-            cwd=str(repo),
+            cwd=repo,
             env=trial_env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            check=False,
         )
-        print(trial.stdout)
-        trial_json = _extract_last_json_block(trial.stdout)
+        trial_json = _extract_last_json_block(trial_stdout)
         run_id = str(trial_json.get("run_id", "")).strip()
         if run_id == "":
             if bool(trial_json.get("stop_worker_loop")):
@@ -251,10 +264,10 @@ def main() -> int:
             raise RuntimeError("run_id missing in LLM trial output")
         trial_expected_models = int(trial_json.get("expected_models_total", generations * models_per_generation) or (generations * models_per_generation))
         trial_created_models = int(trial_json.get("proposals_created", 0) or 0)
-        partial_generation = (trial.returncode != 0 or not trial_json.get("ok")) and trial_created_models > 0
+        partial_generation = (trial_rc != 0 or not trial_json.get("ok")) and trial_created_models > 0
         effective_expected_models = trial_created_models if partial_generation else trial_expected_models
-        if (trial.returncode != 0 or not trial_json.get("ok")) and not partial_generation:
-            raise RuntimeError(f"LLM trial failed: rc={trial.returncode}, result={trial_json}")
+        if (trial_rc != 0 or not trial_json.get("ok")) and not partial_generation:
+            raise RuntimeError(f"LLM trial failed: rc={trial_rc}, result={trial_json}")
 
         _emit_progress({
             "stage": "generation_phase_completed",
