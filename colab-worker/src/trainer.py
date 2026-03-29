@@ -406,8 +406,26 @@ class ModelTrainerEngine:
         if repair_depth >= 1:
             return
         lowered = error_message.lower()
-        structural_markers = ["source_feature_maps", "source_feature_map", "output_feature_map_name", "architecture_definition", "no definida"]
-        if not any(marker in lowered for marker in structural_markers):
+        non_repairable_markers = [
+            "cuda",
+            "cudnn",
+            "out of memory",
+            "oom",
+            "resource exhausted",
+            "no module named",
+            "permission denied",
+            "file not found",
+            "404 client error",
+            "401 client error",
+            "403 client error",
+            "429 client error",
+            "rate limit",
+            "keyboardinterrupt",
+            "connection aborted",
+            "connection refused",
+            "name resolution",
+        ]
+        if any(marker in lowered for marker in non_repairable_markers):
             return
 
         candidate_payload = proposal.get("proposal") if isinstance(proposal.get("proposal"), dict) else {}
