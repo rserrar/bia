@@ -32,6 +32,11 @@ except ImportError:
 
 from src.api_client import ApiClient
 
+try:
+    from .llm_client import LlmConfig, LlmProposalClient
+except ImportError:
+    from llm_client import LlmConfig, LlmProposalClient
+
 
 def _resolve_repo_path(path_str: str, repo_root: Path) -> Path:
     raw = Path(path_str.strip())
@@ -256,6 +261,31 @@ class ModelTrainerEngine:
         self._data_cache_lock = threading.Lock()
         self._data_prewarm_started = False
         self._data_prewarm_completed = False
+        self.llm = LlmProposalClient(
+            LlmConfig(
+                enabled=os.getenv("V2_LLM_ENABLED", "false").lower() in {"1", "true", "yes"},
+                use_legacy_interface=os.getenv("V2_LLM_USE_LEGACY_INTERFACE", "true").lower() in {"1", "true", "yes"},
+                provider=os.getenv("V2_LLM_PROVIDER", "mock"),
+                endpoint=os.getenv("V2_LLM_ENDPOINT", ""),
+                api_key=os.getenv("V2_LLM_API_KEY", ""),
+                model=os.getenv("V2_LLM_MODEL", "gpt-5.4"),
+                fallback_provider=os.getenv("V2_LLM_FALLBACK_PROVIDER", ""),
+                fallback_endpoint=os.getenv("V2_LLM_FALLBACK_ENDPOINT", ""),
+                fallback_api_key=os.getenv("V2_LLM_FALLBACK_API_KEY", os.getenv("GEMINI_API_KEY", "")),
+                fallback_model=os.getenv("V2_LLM_FALLBACK_MODEL", "gemini-3-flash-preview"),
+                timeout_seconds=int(os.getenv("V2_LLM_TIMEOUT_SECONDS", "90")),
+                temperature=float(os.getenv("V2_LLM_TEMPERATURE", "0.2")),
+                max_tokens=int(os.getenv("V2_LLM_MAX_TOKENS", "6000")),
+                system_prompt=os.getenv("V2_LLM_SYSTEM_PROMPT", "Return only a JSON object with keys base_model_id and proposal."),
+                prompt_template_file=os.getenv("V2_LLM_PROMPT_TEMPLATE_FILE", "prompts/generate_new_models.txt"),
+                fix_error_prompt_file=os.getenv("V2_LLM_FIX_ERROR_PROMPT_FILE", "prompts/fix_model_error.txt"),
+                architecture_guide_file=os.getenv("V2_LLM_ARCHITECTURE_GUIDE_FILE", "prompts/instruccions.md"),
+                experiment_config_file=os.getenv("V2_LLM_EXPERIMENT_CONFIG_FILE", "configs/experiment_config.json"),
+                num_new_models=int(os.getenv("V2_LLM_NUM_NEW_MODELS", "1")),
+                num_reference_models=int(os.getenv("V2_LLM_NUM_REFERENCE_MODELS", "3")),
+                repair_on_validation_error=os.getenv("V2_LLM_REPAIR_ON_VALIDATION_ERROR", "true").lower() in {"1", "true", "yes"},
+            )
+        )
 
     def _load_legacy_training_utils(self) -> tuple[Any, Any, Any, Any, Any]:
         if self._legacy_utils_cache is not None:
@@ -366,6 +396,157 @@ class ModelTrainerEngine:
         except Exception:
             return max_epochs, max_training_seconds
         return max_epochs, max_training_seconds
+
+    def _attempt_repair_failed_proposal(self, proposal: dict[str, Any], run_id: str, error_message: str) -> None:
+        if not self.llm.config.enabled:
+            return
+        llm_metadata_raw = proposal.get("llm_metadata")
+        llm_metadata = llm_metadata_raw if isinstance(llm_metadata_raw, dict) else {}
+        repair_depth = int(llm_metadata.get("repair_depth", 0) or 0)
+        if repair_depth >= 1:
+            return
+        lowered = error_message.lower()
+        structural_markers = ["source_feature_maps", "source_feature_map", "output_feature_map_name", "architecture_definition", "no definida"]
+        if not any(marker in lowered for marker in structural_markers):
+            return
+
+        candidate_payload = proposal.get("proposal") if isinstance(proposal.get("proposal"), dict) else {}
+        original_candidate = {
+            "base_model_id": str(proposal.get("base_model_id", "")).strip() or "repair_base_model",
+            "proposal": candidate_payload,
+            "llm_metadata": llm_metadata,
+        }
+        context = {
+            "generation": int(llm_metadata.get("from_generation", 0) or 0),
+            "run_id": run_id,
+            "code_version": os.getenv("V2_CODE_VERSION", ""),
+            "reference_models": [],
+            "reference_selection_trace": {},
+            "latest_metrics": {},
+        }
+        references, selection_trace = self._collect_reference_models_for_prompt(run_id)
+        context["reference_models"] = references
+        context["reference_selection_trace"] = selection_trace
+
+        for attempt in range(3):
+            candidate_to_submit: dict[str, Any] | None = None
+            mode = "repair"
+            if attempt == 0:
+                try:
+                    candidate_to_submit = self.llm._repair_candidate_after_validation_error(original_candidate, error_message, context)
+                except Exception as repair_error:
+                    self.api.add_event(run_id, "model_repair_failed", f"Repair LLM fallida per {proposal.get('proposal_id', '')}", {"error": str(repair_error), "attempt": attempt + 1})
+            else:
+                mode = "replacement"
+                try:
+                    candidate_to_submit = self.llm.generate_candidate(context)
+                except Exception as replacement_error:
+                    self.api.add_event(run_id, "model_repair_failed", f"Generació reemplaçament fallida per {proposal.get('proposal_id', '')}", {"error": str(replacement_error), "attempt": attempt + 1})
+
+            if not isinstance(candidate_to_submit, dict):
+                continue
+            submitted_id = self._submit_repaired_candidate(run_id, proposal, candidate_to_submit, error_message, repair_depth, mode, attempt + 1)
+            if submitted_id is not None:
+                return
+
+    def _collect_reference_models_for_prompt(self, run_id: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        max_refs = max(0, int(os.getenv("V2_LLM_NUM_REFERENCE_MODELS", "3")))
+        if max_refs <= 0:
+            return [], {"selected": [], "rejected": [], "fallback_used": False}
+        references: list[dict[str, Any]] = []
+        selected_trace: list[dict[str, Any]] = []
+        rejected_trace: list[dict[str, Any]] = []
+        try:
+            proposals = self.api.list_model_proposals(limit=300)
+            ranked: list[tuple[float, dict[str, Any], dict[str, Any]]] = []
+            for candidate in proposals:
+                payload = candidate.get("proposal")
+                if not isinstance(payload, dict):
+                    continue
+                model_definition = payload.get("model_definition")
+                if not isinstance(model_definition, dict):
+                    continue
+                decision = evaluate_reference_candidate(candidate, config=self.selection_policy_config)
+                if not bool(decision.get("eligible")):
+                    rejected_trace.append({
+                        "proposal_id": str(candidate.get("proposal_id", "")),
+                        "status": str(candidate.get("status", "")),
+                        "selection_reason": str(decision.get("selection_reason", "")),
+                        "score": decision.get("score"),
+                    })
+                    continue
+                score = float(decision.get("score", 0.0))
+                reference = dict(model_definition)
+                reference["model_id"] = str(model_definition.get("model_id", candidate.get("proposal_id", "unknown_model")))
+                ranked.append((score, reference, decision))
+            ranked.sort(key=lambda item: item[0], reverse=True)
+            top = ranked[:max_refs]
+            references = [item[1] for item in top]
+            selected_trace = [{
+                "proposal_id": str(item[2].get("proposal_id", "")),
+                "score": item[2].get("score"),
+                "selection_reason": item[2].get("selection_reason", ""),
+            } for item in top]
+        except Exception:
+            references = []
+        return references, {
+            "policy_version": str(self.selection_policy_config.get("policy_version", "selection_policy_v1")),
+            "selected": selected_trace,
+            "rejected": rejected_trace[:10],
+            "fallback_used": len(references) == 0,
+        }
+
+    def _submit_repaired_candidate(
+        self,
+        run_id: str,
+        proposal: dict[str, Any],
+        candidate: dict[str, Any],
+        error_message: str,
+        repair_depth: int,
+        mode: str,
+        attempt_number: int,
+    ) -> str | None:
+        repaired_proposal = candidate.get("proposal") if isinstance(candidate.get("proposal"), dict) else {}
+        if not repaired_proposal:
+            return None
+        repaired_metadata_raw = candidate.get("llm_metadata")
+        repaired_metadata = repaired_metadata_raw if isinstance(repaired_metadata_raw, dict) else {}
+        repaired_metadata["repair_depth"] = repair_depth + 1
+        repaired_metadata["repaired_from_proposal_id"] = str(proposal.get("proposal_id", ""))
+        repaired_metadata["repair_source_error"] = error_message
+        repaired_metadata["repair_mode"] = mode
+        repaired_metadata["repair_attempt"] = attempt_number
+        created = self.api.create_model_proposal(
+            source_run_id=run_id,
+            base_model_id=str(candidate.get("base_model_id", proposal.get("base_model_id", "repair_base_model"))),
+            proposal=repaired_proposal,
+            llm_metadata=repaired_metadata,
+        )
+        repaired_id = str(created.get("proposal_id", ""))
+        if repaired_id == "":
+            return None
+        self.api.enqueue_model_proposal_phase0(repaired_id)
+        try:
+            self.api.process_model_proposals_phase0(limit=5)
+        except Exception:
+            pass
+        refreshed = self.api.get_model_proposal(repaired_id)
+        refreshed_status = str(refreshed.get("status", ""))
+        if refreshed_status == "validated_phase0":
+            self.api.add_event(
+                run_id,
+                "model_repair_enqueued",
+                f"Proposal reparada i reenviada a phase0: {repaired_id}",
+                {"original_proposal_id": proposal.get("proposal_id"), "repaired_proposal_id": repaired_id, "mode": mode, "attempt": attempt_number},
+            )
+            return repaired_id
+        self.api.add_event(
+            run_id,
+            "model_repair_failed",
+            f"Proposal reparada rebutjada a phase0: {repaired_id}",
+            {"original_proposal_id": proposal.get("proposal_id"), "repaired_proposal_id": repaired_id, "status": refreshed_status, "mode": mode, "attempt": attempt_number},
+        )
+        return None
 
     def _current_memory_mb(self) -> float | None:
         if resource is None:
@@ -811,6 +992,10 @@ class ModelTrainerEngine:
                 self.api.add_event(run_id, "model_training_failed", f"Error a l'entrenar {proposal_id}", {"error": err_msg})
             except Exception as event_error:
                 print(f"⚠️ API: no s'ha pogut enviar event failed ({event_error})")
+            try:
+                self._attempt_repair_failed_proposal(proposal, run_id, err_msg)
+            except Exception as repair_error:
+                print(f"⚠️ Repair automàtic fallit per {proposal_id}: {repair_error}")
         finally:
             cleanup_started_at = time.time()
             if keras_model is not None:

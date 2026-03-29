@@ -1103,21 +1103,83 @@ final class ApiService
         $baseModelId = (string) ($proposal['base_model_id'] ?? '');
         $candidate = $proposal['proposal'] ?? [];
         $llmMetadata = is_array($proposal['llm_metadata'] ?? null) ? $proposal['llm_metadata'] : [];
-        $validationOk = $sourceRunId !== '' && $baseModelId !== '' && is_array($candidate) && count($candidate) > 0;
+        $phase0Errors = $this->validateProposalStructureForPhase0($proposal);
+        $validationOk = $sourceRunId !== '' && $baseModelId !== '' && is_array($candidate) && count($candidate) > 0 && count($phase0Errors) === 0;
         $llmMetadata['phase0_auto'] = [
             'mode' => 'api-structural-check',
             'ok' => $validationOk,
             'checked_at' => $this->nowIso(),
+            'errors' => $phase0Errors,
         ];
         if ($validationOk) {
             $proposal['status'] = 'validated_phase0';
             $llmMetadata['phase0_validated_at'] = $this->nowIso();
         } else {
             $proposal['status'] = 'rejected';
-            $llmMetadata['phase0_rejected_reason'] = 'invalid proposal payload for phase0 queue';
+            $llmMetadata['phase0_rejected_reason'] = count($phase0Errors) > 0 ? implode(' | ', $phase0Errors) : 'invalid proposal payload for phase0 queue';
         }
         $proposal['llm_metadata'] = $llmMetadata;
         return $proposal;
+    }
+
+    private function validateProposalStructureForPhase0(array $proposal): array
+    {
+        $candidate = $proposal['proposal'] ?? null;
+        if (!is_array($candidate)) {
+            return ['proposal payload missing'];
+        }
+        $modelDefinition = $candidate['model_definition'] ?? null;
+        if (!is_array($modelDefinition)) {
+            return ['model_definition missing'];
+        }
+        $architecture = $modelDefinition['architecture_definition'] ?? null;
+        if (!is_array($architecture)) {
+            return ['architecture_definition missing'];
+        }
+
+        $errors = [];
+        $usedInputs = $architecture['used_inputs'] ?? null;
+        if (!is_array($usedInputs) || count($usedInputs) === 0) {
+            $errors[] = 'used_inputs missing or empty';
+        }
+        foreach ((array) ($architecture['branches'] ?? []) as $branchIndex => $branch) {
+            if (!is_array($branch)) {
+                $errors[] = "branch[$branchIndex] invalid";
+                continue;
+            }
+            if (trim((string) ($branch['input_source_layer'] ?? '')) === '') {
+                $errors[] = "branch[$branchIndex].input_source_layer missing";
+            }
+            if (trim((string) ($branch['output_feature_map_name'] ?? '')) === '') {
+                $errors[] = "branch[$branchIndex].output_feature_map_name missing";
+            }
+        }
+        foreach ((array) ($architecture['merges'] ?? []) as $mergeIndex => $merge) {
+            if (!is_array($merge)) {
+                $errors[] = "merge[$mergeIndex] invalid";
+                continue;
+            }
+            $sourceMaps = $merge['source_feature_maps'] ?? null;
+            if (!is_array($sourceMaps) || count($sourceMaps) === 0) {
+                $errors[] = "merge[$mergeIndex].source_feature_maps missing or empty";
+            }
+            if (trim((string) ($merge['output_feature_map_name'] ?? '')) === '') {
+                $errors[] = "merge[$mergeIndex].output_feature_map_name missing";
+            }
+        }
+        foreach ((array) ($architecture['output_heads'] ?? []) as $headIndex => $head) {
+            if (!is_array($head)) {
+                $errors[] = "output_head[$headIndex] invalid";
+                continue;
+            }
+            if (trim((string) ($head['source_feature_map'] ?? '')) === '') {
+                $errors[] = "output_head[$headIndex].source_feature_map missing";
+            }
+            if (trim((string) ($head['output_layer_name'] ?? '')) === '') {
+                $errors[] = "output_head[$headIndex].output_layer_name missing";
+            }
+        }
+        return $errors;
     }
 
     private function nowIso(): string
