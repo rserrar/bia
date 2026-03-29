@@ -968,7 +968,7 @@ final class ApiService
         ];
     }
 
-    public function resetAllData(): array
+    public function resetAllData(bool $preserveBestModels = false, int $preserveLimit = 3): array
     {
         if (!method_exists($this->store, 'resetAll')) {
             throw new RuntimeException('reset not supported');
@@ -982,11 +982,33 @@ final class ApiService
             'model_proposals' => count(is_array($before['model_proposals'] ?? null) ? $before['model_proposals'] : []),
             'execution_requests' => count(is_array($before['execution_requests'] ?? null) ? $before['execution_requests'] : []),
         ];
-        $deletedArtifactFiles = $this->deleteDirectoryContents($this->artifactStorageDir());
-        $this->store->resetAll();
+        $preserved = [
+            'runs' => 0,
+            'events' => 0,
+            'metrics' => 0,
+            'artifacts' => 0,
+            'model_proposals' => 0,
+            'execution_requests' => 0,
+            'artifact_files' => 0,
+            'proposal_ids' => [],
+        ];
+        if ($preserveBestModels) {
+            if (!method_exists($this->store, 'replaceAll')) {
+                throw new RuntimeException('selective reset not supported');
+            }
+            $preservedState = $this->buildPreservedBestState($before, max(1, $preserveLimit));
+            $preserved = $preservedState['summary'];
+            $deletedArtifactFiles = $this->deleteDirectoryContentsExcept($this->artifactStorageDir(), $preservedState['artifact_file_paths']);
+            $this->store->replaceAll($preservedState['state']);
+        } else {
+            $deletedArtifactFiles = $this->deleteDirectoryContents($this->artifactStorageDir());
+            $this->store->resetAll();
+        }
         return [
             'ok' => true,
             'deleted' => array_merge($counts, ['artifact_files' => $deletedArtifactFiles]),
+            'preserved' => $preserved,
+            'preserve_best_models' => $preserveBestModels,
             'reset_at' => $this->nowIso(),
         ];
     }
@@ -1749,6 +1771,102 @@ final class ApiService
         return dirname(__DIR__) . '/../storage/artifacts';
     }
 
+    private function buildPreservedBestState(array $state, int $limit): array
+    {
+        $policy = $this->policyConfigForProfile(getenv('V2_SELECTION_POLICY_PROFILE') ?: 'default');
+        $proposals = array_values(array_filter(
+            is_array($state['model_proposals'] ?? null) ? $state['model_proposals'] : [],
+            static fn(array $proposal): bool => (string) ($proposal['status'] ?? '') === 'trained'
+        ));
+        $evaluated = [];
+        foreach ($proposals as $proposal) {
+            $decision = $this->evaluateProposalSelection($proposal, $policy);
+            if ((bool) ($decision['eligible'] ?? false)) {
+                $evaluated[] = ['proposal' => $proposal, 'decision' => $decision];
+            }
+        }
+        usort($evaluated, static fn(array $a, array $b): int => ((float) ($b['decision']['score'] ?? 0.0)) <=> ((float) ($a['decision']['score'] ?? 0.0)));
+        $selectedProposals = [];
+        foreach (array_slice($evaluated, 0, max(1, $limit)) as $entry) {
+            $proposal = is_array($entry['proposal'] ?? null) ? $entry['proposal'] : [];
+            if (!empty($proposal)) {
+                $selectedProposals[(string) ($proposal['proposal_id'] ?? '')] = $proposal;
+            }
+        }
+        foreach ($proposals as $proposal) {
+            $metadata = is_array($proposal['llm_metadata'] ?? null) ? $proposal['llm_metadata'] : [];
+            if (($metadata['champion_active'] ?? false) === true) {
+                $selectedProposals[(string) ($proposal['proposal_id'] ?? '')] = $proposal;
+            }
+        }
+
+        $proposalIds = array_values(array_filter(array_keys($selectedProposals), static fn(string $id): bool => $id !== ''));
+        $runIds = [];
+        foreach ($selectedProposals as $proposal) {
+            $runId = (string) ($proposal['source_run_id'] ?? '');
+            if ($runId !== '' && !in_array($runId, $runIds, true)) {
+                $runIds[] = $runId;
+            }
+        }
+
+        $runs = [];
+        foreach ((array) ($state['runs'] ?? []) as $runId => $run) {
+            if (in_array((string) $runId, $runIds, true) && is_array($run)) {
+                $runs[(string) $runId] = $run;
+            }
+        }
+        $events = array_values(array_filter(
+            is_array($state['events'] ?? null) ? $state['events'] : [],
+            static fn(array $event): bool => in_array((string) ($event['run_id'] ?? ''), $runIds, true)
+        ));
+        $metrics = array_values(array_filter(
+            is_array($state['metrics'] ?? null) ? $state['metrics'] : [],
+            static fn(array $metric): bool => in_array((string) ($metric['run_id'] ?? ''), $runIds, true)
+        ));
+        $artifacts = array_values(array_filter(
+            is_array($state['artifacts'] ?? null) ? $state['artifacts'] : [],
+            static function (array $artifact) use ($proposalIds, $runIds): bool {
+                $metadata = is_array($artifact['metadata'] ?? null) ? $artifact['metadata'] : [];
+                $proposalId = (string) ($metadata['proposal_id'] ?? '');
+                $artifactType = (string) ($artifact['artifact_type'] ?? '');
+                if ($proposalId !== '' && in_array($proposalId, $proposalIds, true) && in_array($artifactType, ['trained_model', 'champion_model', 'checkpoint'], true)) {
+                    return true;
+                }
+                return in_array((string) ($artifact['run_id'] ?? ''), $runIds, true) && $artifactType === 'champion_model';
+            }
+        ));
+        $artifactPaths = [];
+        foreach ($artifacts as $artifact) {
+            $uri = (string) ($artifact['uri'] ?? '');
+            if ($uri !== '' && is_file($uri)) {
+                $artifactPaths[] = $uri;
+            }
+        }
+
+        $preservedState = [
+            'runs' => $runs,
+            'events' => $events,
+            'metrics' => $metrics,
+            'artifacts' => $artifacts,
+            'model_proposals' => array_values($selectedProposals),
+            'execution_requests' => [],
+        ];
+        return [
+            'state' => $preservedState,
+            'artifact_file_paths' => $artifactPaths,
+            'summary' => [
+                'runs' => count($runs),
+                'events' => count($events),
+                'metrics' => count($metrics),
+                'artifacts' => count($artifacts),
+                'model_proposals' => count($selectedProposals),
+                'execution_requests' => 0,
+                'artifact_files' => count($artifactPaths),
+                'proposal_ids' => $proposalIds,
+            ],
+        ];
+    }
+
     private function deltaValue($left, $right): ?float
     {
         if (!is_numeric($left) || !is_numeric($right)) {
@@ -1793,6 +1911,53 @@ final class ApiService
                 if (@rmdir($path)) {
                     $deleted += 1;
                 }
+                continue;
+            }
+            if (@unlink($path)) {
+                $deleted += 1;
+            }
+        }
+        return $deleted;
+    }
+
+    private function deleteDirectoryContentsExcept(string $directory, array $preserveFilePaths): int
+    {
+        if (!is_dir($directory)) {
+            return 0;
+        }
+        $preserveMap = [];
+        foreach ($preserveFilePaths as $path) {
+            if (is_string($path) && $path !== '') {
+                $real = realpath($path);
+                $preserveMap[$real !== false ? $real : $path] = true;
+            }
+        }
+        return $this->deleteDirectoryContentsExceptRecursive($directory, $preserveMap);
+    }
+
+    private function deleteDirectoryContentsExceptRecursive(string $directory, array $preserveMap): int
+    {
+        $deleted = 0;
+        $items = scandir($directory);
+        if ($items === false) {
+            return 0;
+        }
+        foreach ($items as $item) {
+            if ($item === '.' || $item === '..') {
+                continue;
+            }
+            $path = $directory . DIRECTORY_SEPARATOR . $item;
+            if (is_dir($path)) {
+                $deleted += $this->deleteDirectoryContentsExceptRecursive($path, $preserveMap);
+                $remaining = scandir($path);
+                if (is_array($remaining) && count($remaining) <= 2 && @rmdir($path)) {
+                    $deleted += 1;
+                }
+                continue;
+            }
+            $real = realpath($path);
+            $normalized = $real !== false ? $real : $path;
+            if (isset($preserveMap[$normalized])) {
                 continue;
             }
             if (@unlink($path)) {

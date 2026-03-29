@@ -705,7 +705,8 @@ try {
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && (string) ($_POST['action'] ?? '') === 'reset_all_data') {
         $confirm = is_string($_POST['confirm'] ?? null) ? (string) $_POST['confirm'] : '';
         if ($confirm === 'DELETE TEST DATA') {
-            $_SESSION['reset_result'] = $service->resetAllData();
+            $preserveBestModels = in_array((string) ($_POST['preserve_best_models'] ?? '0'), ['1', 'true', 'yes'], true);
+            $_SESSION['reset_result'] = $service->resetAllData($preserveBestModels, 3);
         }
         redirectToMonitorHome();
     }
@@ -916,7 +917,7 @@ try {
             <button type="submit"><?php echo $autoRefreshEnabled ? 'Aturar auto-actualització' : 'Activar auto-actualització'; ?></button>
         </form>
         <?php if ($resetResult !== null): ?>
-            <span class="notice">Reset fet · Runs: <?php echo (int) ($resetResult['deleted']['runs'] ?? 0); ?> · Events: <?php echo (int) ($resetResult['deleted']['events'] ?? 0); ?> · Metrics: <?php echo (int) ($resetResult['deleted']['metrics'] ?? 0); ?> · Artifacts: <?php echo (int) ($resetResult['deleted']['artifacts'] ?? 0); ?> · Proposals: <?php echo (int) ($resetResult['deleted']['model_proposals'] ?? 0); ?> · Exec requests: <?php echo (int) ($resetResult['deleted']['execution_requests'] ?? 0); ?> · Fitxers artifact: <?php echo (int) ($resetResult['deleted']['artifact_files'] ?? 0); ?></span>
+            <span class="notice">Reset fet · Runs: <?php echo (int) ($resetResult['deleted']['runs'] ?? 0); ?> · Events: <?php echo (int) ($resetResult['deleted']['events'] ?? 0); ?> · Metrics: <?php echo (int) ($resetResult['deleted']['metrics'] ?? 0); ?> · Artifacts: <?php echo (int) ($resetResult['deleted']['artifacts'] ?? 0); ?> · Proposals: <?php echo (int) ($resetResult['deleted']['model_proposals'] ?? 0); ?> · Exec requests: <?php echo (int) ($resetResult['deleted']['execution_requests'] ?? 0); ?> · Fitxers artifact: <?php echo (int) ($resetResult['deleted']['artifact_files'] ?? 0); ?><?php if (($resetResult['preserve_best_models'] ?? false) === true): ?> · Conservats: <?php echo (int) (($resetResult['preserved']['model_proposals'] ?? 0)); ?> models top<?php endif; ?></span>
         <?php endif; ?>
         <?php if ($evalResult !== null): ?>
             <span class="notice">Models avaluats (KPIs): <?php echo (int) ($evalResult['evaluated_count'] ?? 0); ?></span>
@@ -930,10 +931,12 @@ try {
     <div class="panel danger" style="margin-top:0;">
         <h2 style="margin-top:0; color:#fecaca;">Confirmar reset de dades de prova</h2>
         <div class="kpi">Aquesta acció esborra totes les dades guardades al servidor per fer proves netes: runs, events, metrics, artifacts, proposals, execution requests i fitxers d'artifacts del servidor.</div>
+        <div class="kpi" style="margin-top:8px;">Opcionalment pots conservar els millors models entrenats actuals com a mostra per a la següent execució.</div>
         <div class="kpi" style="margin-top:8px;">Per confirmar, escriu exactament <span class="mono">DELETE TEST DATA</span>.</div>
         <form method="post" action="./monitor.php" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:12px;">
             <input type="hidden" name="action" value="reset_all_data">
             <input type="text" name="confirm" placeholder="DELETE TEST DATA" class="mono" style="min-width:220px; background:#0b1220; color:#e2e8f0; border:1px solid #7f1d1d; padding:6px 8px; border-radius:4px;">
+            <label class="kpi" style="display:flex; align-items:center; gap:6px;"><input type="checkbox" name="preserve_best_models" value="1"> Conservar millors models</label>
             <button type="submit" class="danger">Confirmar esborrat</button>
             <a href="./monitor.php">Cancel·lar</a>
         </form>

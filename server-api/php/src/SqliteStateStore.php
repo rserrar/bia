@@ -349,6 +349,50 @@ final class SqliteStateStore
         }
     }
 
+    public function replaceAll(array $state): void
+    {
+        $this->resetAll();
+        $this->pdo->beginTransaction();
+        try {
+            foreach ((array) ($state['runs'] ?? []) as $run) {
+                if (is_array($run)) {
+                    $this->upsertRun($run);
+                }
+            }
+            foreach ((array) ($state['events'] ?? []) as $event) {
+                if (is_array($event)) {
+                    $this->appendEvent($event);
+                }
+            }
+            foreach ((array) ($state['metrics'] ?? []) as $metric) {
+                if (is_array($metric)) {
+                    $this->appendMetric($metric);
+                }
+            }
+            foreach ((array) ($state['artifacts'] ?? []) as $artifact) {
+                if (is_array($artifact)) {
+                    $this->appendArtifact($artifact);
+                }
+            }
+            foreach ((array) ($state['model_proposals'] ?? []) as $proposal) {
+                if (is_array($proposal)) {
+                    $this->appendModelProposal($proposal);
+                }
+            }
+            foreach ((array) ($state['execution_requests'] ?? []) as $request) {
+                if (is_array($request)) {
+                    $this->appendExecutionRequest($request);
+                }
+            }
+            $this->pdo->commit();
+        } catch (\Throwable $error) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            throw $error;
+        }
+    }
+
     private function initializeSchema(): void
     {
         $this->pdo->exec(

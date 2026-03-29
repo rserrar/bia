@@ -131,6 +131,11 @@ final class StateStore
         $this->write($this->emptyState());
     }
 
+    public function replaceAll(array $payload): void
+    {
+        $this->write($payload);
+    }
+
     private function mutate(callable $callback): void
     {
         $handle = fopen($this->filePath, 'c+');
