@@ -81,12 +81,13 @@ def _poll_until_trained(
     token: str,
     run_id: str,
     timeout_seconds: int,
+    expected_models_total: int | None = None,
     on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict:
     started = time.time()
     generations_total = max(1, int(os.getenv("V2_E2E_GENERATIONS", "1")))
     models_per_generation = max(1, int(os.getenv("V2_LLM_NUM_NEW_MODELS", os.getenv("V2_MODELS_PER_GENERATION", "1"))))
-    expected_models_total = generations_total * models_per_generation
+    expected_models_total = expected_models_total or (generations_total * models_per_generation)
     last_seen: dict = {}
     while True:
         run_payload, _ = _request_json("GET", api_base_url, f"/runs/{run_id}", token)
@@ -236,23 +237,30 @@ def main() -> int:
         print(trial.stdout)
         trial_json = _extract_last_json_block(trial.stdout)
         run_id = str(trial_json.get("run_id", "")).strip()
-        if trial.returncode != 0 or not trial_json.get("ok"):
-            raise RuntimeError(f"LLM trial failed: rc={trial.returncode}, result={trial_json}")
         if run_id == "":
             raise RuntimeError("run_id missing in LLM trial output")
+        trial_expected_models = int(trial_json.get("expected_models_total", generations * models_per_generation) or (generations * models_per_generation))
+        trial_created_models = int(trial_json.get("proposals_created", 0) or 0)
+        partial_generation = (trial.returncode != 0 or not trial_json.get("ok")) and trial_created_models > 0
+        effective_expected_models = trial_created_models if partial_generation else trial_expected_models
+        if (trial.returncode != 0 or not trial_json.get("ok")) and not partial_generation:
+            raise RuntimeError(f"LLM trial failed: rc={trial.returncode}, result={trial_json}")
 
         _emit_progress({
             "stage": "generation_phase_completed",
-            "stage_label": "Generacions completades; esperant tancament de training en paral·lel",
+            "stage_label": "Generacions completades; esperant tancament de training en paral·lel" if not partial_generation else "Generació parcial; continuant amb els models disponibles",
             "run_id": run_id,
             "current_run_id": run_id,
             "run_ids": [run_id],
             "generations_total": generations,
             "generations_completed": int(trial_json.get("generations", generations) or generations),
-            "models_generated": int(trial_json.get("proposals_created", 0) or 0),
+            "models_generated": trial_created_models,
             "models_trained": 0,
             "latest_event_type": trial_json.get("latest_event_type"),
             "latest_event_label": trial_json.get("latest_event_label"),
+            "partial_generation": partial_generation,
+            "effective_expected_models_total": effective_expected_models,
+            "llm_error_events": int(trial_json.get("llm_error_events", 0) or 0),
         })
 
         result = _poll_until_trained(
@@ -260,6 +268,7 @@ def main() -> int:
             api_token,
             run_id,
             timeout_seconds=train_timeout_seconds,
+            expected_models_total=effective_expected_models,
             on_progress=_emit_progress,
         )
     finally:
@@ -288,6 +297,10 @@ def main() -> int:
             if isinstance(proposal, dict) and proposal.get("status") == "trained"
         ]),
         "elapsed_seconds": result.get("elapsed_seconds"),
+        "partial_generation": partial_generation,
+        "effective_expected_models_total": effective_expected_models,
+        "llm_error_events": int(trial_json.get("llm_error_events", 0) or 0),
+        "llm_error_samples": trial_json.get("llm_error_samples", []),
         "proposal_id": trained_proposal.get("proposal_id"),
         "proposal_status": trained_proposal.get("status"),
         "trained_model_uri": (trained_proposal.get("llm_metadata") or {}).get("trained_model_uri"),
