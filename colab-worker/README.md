@@ -28,6 +28,11 @@ Aquest notebook:
 - configura l'entorn per al control plane server-driven
 - arrenca `run_worker_loop.py`
 
+Nota LLM:
+
+- si vols fallback nadiu a Gemini, el notebook ha d'instal·lar `google-genai`
+- defineix `V2_LLM_FALLBACK_PROVIDER=gemini` i `GEMINI_API_KEY` o `V2_LLM_FALLBACK_API_KEY`
+
 ## Layout de dades per al worker
 
 El pipeline de training/validació fa servir la configuració d'experiment a `configs/experiment_config.json`.

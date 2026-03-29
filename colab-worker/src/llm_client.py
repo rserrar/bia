@@ -362,7 +362,6 @@ class LlmProposalClient:
     ) -> dict[str, Any]:
         if api_key_override.strip() == "":
             raise RuntimeError("Gemini api key not configured")
-        endpoint = self._resolve_gemini_endpoint(endpoint_override, model_override)
         try:
             from v2_prompt_builder import V2PromptBuilder
             repo_root = Path(__file__).resolve().parents[2]
@@ -378,6 +377,37 @@ class LlmProposalClient:
         except Exception:
             prompt_text = json.dumps(context, ensure_ascii=False)
 
+        try:
+            from google import genai  # type: ignore[import]
+
+            client = genai.Client(api_key=api_key_override)
+            response = client.models.generate_content(
+                model=model_override,
+                contents=prompt_text,
+                config={
+                    "system_instruction": self.config.system_prompt,
+                    "temperature": self.config.temperature,
+                    "max_output_tokens": int(self.config.max_tokens),
+                },
+            )
+            content = str(getattr(response, "text", "") or "").strip()
+            if content == "":
+                raise RuntimeError("Gemini SDK returned empty text response")
+            extracted = self._extract_first_json_payload(content)
+            parsed = json.loads(extracted)
+            candidate = self._normalize_candidate_response(parsed, provider=provider_label)
+            candidate = self._validate_candidate(candidate)
+            metadata = candidate.get("llm_metadata")
+            metadata_payload = metadata if isinstance(metadata, dict) else {}
+            metadata_payload["raw_response"] = {"sdk_text_preview": content[:4000]}
+            metadata_payload["gemini_transport"] = "google_genai_sdk"
+            candidate["llm_metadata"] = metadata_payload
+            self._attach_prompt_audit_metadata(candidate, context, prompt_text)
+            return candidate
+        except ImportError:
+            pass
+
+        endpoint = self._resolve_gemini_endpoint(endpoint_override, model_override)
         payload = {
             "system_instruction": {
                 "parts": [{"text": self.config.system_prompt}],
