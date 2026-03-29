@@ -1058,11 +1058,98 @@ class LlmProposalClient:
         return candidate
 
     def _normalize_model_definition_schema(self, model_definition: dict[str, Any]) -> dict[str, Any]:
+        nested_proposal = model_definition.get("proposal")
+        if isinstance(nested_proposal, list):
+            first_nested = next((item for item in nested_proposal if isinstance(item, dict)), None)
+            if isinstance(first_nested, dict):
+                model_definition = first_nested
+        elif isinstance(nested_proposal, dict) and isinstance(nested_proposal.get("model_definition"), dict):
+            model_definition = nested_proposal.get("model_definition")
+
         architecture = model_definition.get("architecture_definition")
         if not isinstance(architecture, dict):
             architecture = {}
         for key in ["used_inputs", "branches", "merges", "output_heads"]:
             if isinstance(model_definition.get(key), list) and key not in architecture:
                 architecture[key] = model_definition.get(key)
+        self._normalize_architecture_definition(architecture)
         model_definition["architecture_definition"] = architecture
+        self._normalize_training_config(model_definition)
         return model_definition
+
+    def _normalize_architecture_definition(self, architecture: dict[str, Any]) -> None:
+        branches = architecture.get("branches")
+        if isinstance(branches, list):
+            for branch in branches:
+                if not isinstance(branch, dict):
+                    continue
+                layers = branch.get("layers")
+                if isinstance(layers, list):
+                    for layer in layers:
+                        if isinstance(layer, dict):
+                            layer_type = layer.get("type")
+                            if isinstance(layer_type, str):
+                                layer["type"] = self._normalize_layer_type(layer_type)
+        merges = architecture.get("merges")
+        if isinstance(merges, list):
+            for merge in merges:
+                if not isinstance(merge, dict):
+                    continue
+                merge_type = merge.get("type")
+                if isinstance(merge_type, str):
+                    merge["type"] = merge_type.strip().lower()
+                layers_after_merge = merge.get("layers_after_merge")
+                if isinstance(layers_after_merge, list):
+                    for layer in layers_after_merge:
+                        if isinstance(layer, dict):
+                            layer_type = layer.get("type")
+                            if isinstance(layer_type, str):
+                                layer["type"] = self._normalize_layer_type(layer_type)
+
+    def _normalize_training_config(self, model_definition: dict[str, Any]) -> None:
+        training_config = model_definition.get("training_config")
+        if not isinstance(training_config, dict):
+            return
+        compile_config = training_config.get("compile")
+        if not isinstance(compile_config, dict):
+            return
+        output_heads = model_definition.get("architecture_definition", {}).get("output_heads", [])
+        valid_output_names = {
+            str(head.get("output_layer_name", "")).strip()
+            for head in output_heads
+            if isinstance(head, dict) and str(head.get("output_layer_name", "")).strip() != ""
+        }
+        loss_weights = compile_config.get("loss_weights")
+        if isinstance(loss_weights, dict) and valid_output_names:
+            filtered = {
+                str(key): value
+                for key, value in loss_weights.items()
+                if str(key).strip() in valid_output_names
+            }
+            compile_config["loss_weights"] = filtered
+
+    def _normalize_layer_type(self, layer_type: str) -> str:
+        normalized = layer_type.strip()
+        mapping = {
+            "dense": "Dense",
+            "activation": "Activation",
+            "dropout": "Dropout",
+            "spatialdropout1d": "SpatialDropout1D",
+            "batchnormalization": "BatchNormalization",
+            "layernormalization": "LayerNormalization",
+            "reshape": "Reshape",
+            "conv1d": "Conv1D",
+            "separableconv1d": "SeparableConv1D",
+            "maxpooling1d": "MaxPooling1D",
+            "globalmaxpooling1d": "GlobalMaxPooling1D",
+            "globalaveragepooling1d": "GlobalAveragePooling1D",
+            "lstm": "LSTM",
+            "flatten": "Flatten",
+            "add": "Add",
+            "multiply": "Multiply",
+            "lambdaslice": "LambdaSlice",
+            "attentionkeras": "AttentionKeras",
+            "multiheadattentionkeras": "MultiHeadAttentionKeras",
+        }
+        compact = normalized.replace("_", "").replace("-", "").replace(" ", "").lower()
+        return mapping.get(compact, normalized)

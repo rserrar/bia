@@ -22,6 +22,7 @@ from tensorflow.keras.layers import (
     Lambda,
     LayerNormalization,
     MaxPooling1D,
+    Multiply,
     MultiHeadAttention,
     Reshape,
     SeparableConv1D,
@@ -76,11 +77,12 @@ def _create_keras_layer(
 ):
     layer_type = layer_config.get("type")
     layer_name = layer_config.get("name")
+    layer_type_label = str(layer_type or "unknown")
 
     if not layer_name:
-        layer_name = f"{layer_type.lower()}_{str(uuid.uuid4())[:8]}"
+        layer_name = f"{layer_type_label.lower()}_{str(uuid.uuid4())[:8]}"
         print(
-            f"ALERTA (Model '{model_id_for_debug}'): Capa de tipus '{layer_type}' "
+            f"ALERTA (Model '{model_id_for_debug}'): Capa de tipus '{layer_type_label}' "
             f"sense nom. Assignat: '{layer_name}'."
         )
         layer_config["name"] = layer_name
@@ -467,7 +469,7 @@ def build_model_from_json_definition(model_def_dict: dict[str, Any]) -> Model:
     for merge_conf in architecture_def.get("merges", []):
         merge_name = merge_conf.get("name", f"merge_{str(uuid.uuid4())[:4]}")
         source_map_names_for_merge = merge_conf["source_feature_maps"]
-        merge_type = merge_conf.get("type", "concatenate")
+        merge_type = str(merge_conf.get("type", "concatenate")).strip().lower()
         inputs_to_merge_tensors: list[Any] = []
         for src_name in source_map_names_for_merge:
             if src_name not in processed_feature_maps:
@@ -484,6 +486,16 @@ def build_model_from_json_definition(model_def_dict: dict[str, Any]) -> Model:
                 merged_tensor_output = inputs_to_merge_tensors[0]
             else:
                 merged_tensor_output = concatenate(inputs_to_merge_tensors, name=f"{merge_name}_op")
+        elif merge_type == "add":
+            if len(inputs_to_merge_tensors) == 1:
+                merged_tensor_output = inputs_to_merge_tensors[0]
+            else:
+                merged_tensor_output = Add(name=f"{merge_name}_op")(inputs_to_merge_tensors)
+        elif merge_type == "multiply":
+            if len(inputs_to_merge_tensors) == 1:
+                merged_tensor_output = inputs_to_merge_tensors[0]
+            else:
+                merged_tensor_output = Multiply(name=f"{merge_name}_op")(inputs_to_merge_tensors)
         else:
             raise ValueError(f"Tipus de merge '{merge_type}' no suportat per '{merge_name}'.")
         current_tensor_after_merge = merged_tensor_output
