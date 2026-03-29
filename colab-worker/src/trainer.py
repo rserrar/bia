@@ -5,6 +5,7 @@ import gc
 import hashlib
 import importlib
 import logging
+import threading
 import traceback
 from pathlib import Path
 from typing import Any, Optional, cast
@@ -252,6 +253,9 @@ class ModelTrainerEngine:
         self._experiment_config_cache: dict[str, Any] | None = None
         self._all_data_cache: dict[str, Any] | None = None
         self._legacy_utils_cache: tuple[Any, Any, Any, Any, Any] | None = None
+        self._data_cache_lock = threading.Lock()
+        self._data_prewarm_started = False
+        self._data_prewarm_completed = False
 
     def _load_legacy_training_utils(self) -> tuple[Any, Any, Any, Any, Any]:
         if self._legacy_utils_cache is not None:
@@ -279,43 +283,61 @@ class ModelTrainerEngine:
         return cast(tuple[Any, Any, Any, Any, Any], self._legacy_utils_cache)
 
     def _load_training_data_context(self) -> tuple[dict[str, Any], dict[str, Any]]:
-        if self._experiment_config_cache is not None and self._all_data_cache is not None:
-            return self._experiment_config_cache, self._all_data_cache
+        with self._data_cache_lock:
+            if self._experiment_config_cache is not None and self._all_data_cache is not None:
+                return self._experiment_config_cache, self._all_data_cache
 
-        (
-            load_all_raw_data_sources,
-            derive_additional_features_and_targets,
-            _prepare_model_specific_inputs_outputs,
-            _split_and_scale_data,
-            _build_model_from_json_definition,
-        ) = self._load_legacy_training_utils()
+            (
+                load_all_raw_data_sources,
+                derive_additional_features_and_targets,
+                _prepare_model_specific_inputs_outputs,
+                _split_and_scale_data,
+                _build_model_from_json_definition,
+            ) = self._load_legacy_training_utils()
 
-        print("📊 Carregant el fitxer de configuració de l'experiment (cache warmup)...")
-        experiment_path = Path(
-            os.getenv(
-                "V2_LEGACY_EXPERIMENT_CONFIG_PATH",
-                str(self.repo_root / "configs" / "experiment_config.json"),
+            print("📊 Carregant el fitxer de configuració de l'experiment (cache warmup)...")
+            experiment_path = Path(
+                os.getenv(
+                    "V2_LEGACY_EXPERIMENT_CONFIG_PATH",
+                    str(self.repo_root / "configs" / "experiment_config.json"),
+                )
             )
-        )
-        experiment_path = _resolve_repo_path(str(experiment_path), self.repo_root)
-        with open(experiment_path, "r", encoding="utf-8") as f:
-            exp_config = json.load(f)
+            experiment_path = _resolve_repo_path(str(experiment_path), self.repo_root)
+            with open(experiment_path, "r", encoding="utf-8") as f:
+                exp_config = json.load(f)
 
-        base_data_dir = self.repo_root / exp_config.get("data_dir", "data")
-        input_cfg = exp_config.get("input_features_config", [])
-        output_cfg = exp_config.get("output_targets_config", [])
+            base_data_dir = self.repo_root / exp_config.get("data_dir", "data")
+            input_cfg = exp_config.get("input_features_config", [])
+            output_cfg = exp_config.get("output_targets_config", [])
 
-        print("🔨 Carregant dades font només una vegada per la sessió del trainer...")
-        raw_sources = load_all_raw_data_sources(
-            exp_config.get("data_paths", {}),
-            input_cfg,
-            output_cfg,
-            base_data_dir=str(base_data_dir),
-        )
-        all_data = derive_additional_features_and_targets(raw_sources, input_cfg, output_cfg)
-        self._experiment_config_cache = exp_config
-        self._all_data_cache = all_data
-        return exp_config, all_data
+            print("🔨 Carregant dades font només una vegada per la sessió del trainer...")
+            raw_sources = load_all_raw_data_sources(
+                exp_config.get("data_paths", {}),
+                input_cfg,
+                output_cfg,
+                base_data_dir=str(base_data_dir),
+            )
+            all_data = derive_additional_features_and_targets(raw_sources, input_cfg, output_cfg)
+            self._experiment_config_cache = exp_config
+            self._all_data_cache = all_data
+            self._data_prewarm_completed = True
+            return exp_config, all_data
+
+    def _start_background_data_prewarm(self) -> None:
+        if self._data_prewarm_started:
+            return
+        self._data_prewarm_started = True
+
+        def _runner() -> None:
+            try:
+                print("🧠 Precarregant dades d'entrenament en segon pla mentre arriben propostes LLM...")
+                self._load_training_data_context()
+                print("✅ Cache de dades d'entrenament preparada.")
+            except Exception as error:
+                self._data_prewarm_started = False
+                print(f"⚠️ No s'ha pogut precarregar la cache de dades: {error}")
+
+        threading.Thread(target=_runner, daemon=True, name="trainer-data-prewarm").start()
 
     def _release_training_memory(self, *objects: Any) -> None:
         for obj in objects:
@@ -406,6 +428,7 @@ class ModelTrainerEngine:
 
     def run_loop(self):
         print(f"🟢 [Trainer Worker: {self.trainer_id}] Mantenint cerca de models acceptats...")
+        self._start_background_data_prewarm()
         while True:
             try:
                 proposal = self.api.lock_accepted_proposal_for_training(self.trainer_id)
