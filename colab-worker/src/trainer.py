@@ -7,6 +7,7 @@ import importlib
 import logging
 import threading
 import traceback
+import numpy as np
 from pathlib import Path
 from typing import Any, Optional, cast
 
