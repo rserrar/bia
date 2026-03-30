@@ -17,3 +17,7 @@ Punt d'entrada unificat de documentacio V2.
 - Runbook: `runbook_operations.md`
 - Frontend data contract: `data_contract_frontend.md`
 - Execution control plane: `execution_control_plane.md`
+- Known errors: `errors.md`
+- Observability: `observability.md`
+- Runtime flow: `runtime_flow.md`
+- Operations notes: `operations.md`
