@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 import time
+import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -92,6 +93,12 @@ def _run_and_stream(command: list[str], cwd: Path, env: dict[str, str]) -> tuple
         lines.append(line)
         print(line, end="")
     return proc.wait(), "".join(lines)
+
+
+def _stream_process_output(proc: subprocess.Popen[str], prefix: str) -> None:
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        print(f"{prefix}{line}", end="")
 
 
 def _poll_until_trained(
@@ -229,10 +236,13 @@ def main() -> int:
         [sys.executable, str(repo / "colab-worker" / "run_trainer.py")],
         cwd=str(repo),
         env=trainer_env,
-        stdout=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        bufsize=1,
     )
+    trainer_log_thread = threading.Thread(target=_stream_process_output, args=(trainer, "[trainer] "), daemon=True)
+    trainer_log_thread.start()
 
     print(f"[e2e] start LLM trial generations={generations}")
     _emit_progress({
