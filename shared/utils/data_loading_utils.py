@@ -43,12 +43,14 @@ def load_all_raw_data_sources(
                 if arr.dtype != np.float32:
                     arr = arr.astype(np.float32)
                 loaded_data[csv_key] = arr
+                print(f"✅ Cache binària carregada: {file_name}.npy ({len(arr)} files)")
                 continue
             
             # If not in cache or cache stale, load CSV
             print(f"📄 Carregant CSV: {file_name}...")
             arr = pd.read_csv(file_path, header=None, dtype=np.float32).values
             loaded_data[csv_key] = arr
+            print(f"✅ CSV carregat: {file_name} ({len(arr)} files)")
             
             # Save to binary cache for next time
             try:
