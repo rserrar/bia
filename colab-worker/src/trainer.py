@@ -787,8 +787,15 @@ class ModelTrainerEngine:
 
             print("🔨 Preparant tensors específics del model a partir de dades cachejades...")
             data_prep_started_at = time.time()
+            print(f"📐 Inici prepare_model_specific_inputs_outputs per {proposal_id}")
             X_list, Y_list, in_names, out_names = prepare_model_specific_inputs_outputs(all_data, model_def)
+            prepare_inputs_seconds = round(time.time() - data_prep_started_at, 3)
+            print(f"✅ prepare_model_specific_inputs_outputs complet per {proposal_id} en {prepare_inputs_seconds}s")
+            split_started_at = time.time()
+            print(f"⚖️ Inici split_and_scale_data per {proposal_id}")
             (X_train, Y_train), (X_val, Y_val), (X_test, Y_test), scalers = split_and_scale_data(X_list, Y_list, in_names, exp_config, model_def)
+            split_and_scale_seconds = round(time.time() - split_started_at, 3)
+            print(f"✅ split_and_scale_data complet per {proposal_id} en {split_and_scale_seconds}s")
             data_prep_seconds = round(time.time() - data_prep_started_at, 3)
             del X_list, Y_list, in_names, out_names, X_test, Y_test, scalers
             X_test = []
@@ -946,6 +953,8 @@ class ModelTrainerEngine:
                 metrics['train_loss'] = float(history.history['loss'][-1])
                 metrics['training_time_seconds'] = elapsed
             metrics['data_prep_seconds'] = data_prep_seconds
+            metrics['prepare_inputs_seconds'] = prepare_inputs_seconds
+            metrics['split_and_scale_seconds'] = split_and_scale_seconds
             metrics['model_build_seconds'] = model_build_seconds
             metrics['fit_seconds'] = round(float(elapsed), 3)
             metrics['configured_max_epochs'] = active_max_epochs
