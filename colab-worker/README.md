@@ -29,6 +29,30 @@ Aquest notebook:
 - configura l'entorn per al control plane server-driven
 - arrenca `run_worker_loop.py`
 
+Checklist abans d'arrencar el worker:
+
+- verificar `csv_row_counts`
+- confirmar que el ZIP i `dataset_dir` són els esperats
+- confirmar:
+  - `V2_LLM_USE_LEGACY_INTERFACE=false`
+  - `V2_LLM_REPAIR_ON_VALIDATION_ERROR=true`
+- si vols fallback Gemini:
+  - `V2_LLM_FALLBACK_PROVIDER=gemini`
+  - `GEMINI_API_KEY=...`
+  - `V2_LLM_FALLBACK_MODEL=gemini-3-flash-preview`
+
+Com llegir el log de Colab:
+
+- `🪜 Generació 0 completada com a baseline` = correcte; no crea models nous
+- `🤖 Fent petició... generació X` = crida LLM real
+- `📩 Resposta rebuda...` = resposta LLM rebuda i parsejada
+- `🧩 Proposal creada...` = proposal enviada a `phase0`
+- `⏳ Esperant que la generació X es buidi...` = la generació està pendent de training/rebuig
+- `⚡ Prefetch...` = s'està solapant la generació següent mentre l'últim model s'entrena
+- `[trainer] 🔥 Training iniciat...` = el trainer ha començat realment
+- `[trainer] 🔄 ... inici època` i `[trainer] ✅ Època ... completada` = seguiment d'entrenament útil
+- `⛔ Rate limit LLM...` = toca esperar o activar fallback Gemini
+
 Nota LLM:
 
 - si vols fallback nadiu a Gemini, el notebook ha d'instal·lar `google-genai`

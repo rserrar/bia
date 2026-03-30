@@ -75,6 +75,26 @@ Perfil d'execucio visible al monitor:
 5. reporta `complete` o `fail`
 6. torna a fer polling
 
+## Flux real actual de generacions
+
+Flux actual esperat del worker V2:
+
+1. `generation 0` = baseline
+2. no crea models nous en aquesta generació inicial
+3. `generation 1..N` creen models nous amb l'LLM
+4. cada generació espera que la seva cua es vagi resolent abans de donar-la per tancada
+5. quan queda només un model entrenant-se d'una generació, es pot fer prefetch de la següent
+6. el run no es marca `completed` fins que la cua total d'entrenament s'ha buidat
+
+Events operatius nous i importants:
+
+- `generation_baseline_ready`
+- `generation_drain_wait_started`
+- `generation_drain_wait_completed`
+- `generation_prefetch_started`
+- `training_drain_wait_started`
+- `training_drain_wait_completed`
+
 ## Runtime contract (server-driven)
 
 El servidor es la font canonica de configuracio de l'execucio.
@@ -150,6 +170,38 @@ Objectiu operatiu:
 
 - evitar que una proposal dolenta consumeixi un slot sense reempla\u00e7
 - mantenir sempre feina potencial a la cua mentre hi hagi marge per corregir o regenerar
+
+Política actual:
+
+- si una proposal falla per un error reparable, primer s'intenta `repair`
+- si no funciona, es prova `replacement`
+- es poden fer diversos intents abans de donar el cas per esgotat
+
+Events útils per seguir-ho:
+
+- `model_repair_started`
+- `model_repair_failed`
+- `model_repair_enqueued`
+- `model_repair_exhausted`
+
+## Guia curta per llegir execucions
+
+Ordre típic de lectura:
+
+1. `execution_request`
+2. `run summary`
+3. `events`
+4. `autopsy`
+
+Interpretació ràpida:
+
+- `starting_trial` = encara no hi ha prou context al `result_summary`; potser el run ja està avançant però la request va endarrerida
+- `run_id` buit durant massa estona = cal mirar el log directe de Colab
+- `validated_phase0` = model generat i estructuralment acceptable, pendent d'entrenar
+- `training` = model actualment en execució al trainer
+- `trained` = model completat correctament
+- `rejected` = model descartat a `phase0` o per fallada de trainer
+- `partial_generation=true` = la generació LLM no ha produït tots els models previstos, però el sistema continua amb els disponibles
 
 ## Reclaim policy
 

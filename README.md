@@ -106,6 +106,62 @@ Referències i champion:
 - si hi ha un champion entrenat al servidor, el worker el pot reutilitzar com a model de referència per al prompt LLM
 - el monitor i l'autòpsia distingeixen entre `champion_selected` i `champion_kept`
 
+## Com fem les proves ara
+
+Flux recomanat de prova:
+
+1. netejar el servidor amb el monitor (`Reset dades prova`) o conservar champions si interessa fer proves evolutives
+2. preparar Colab amb `colab-worker/V2_drive_zip_control_plane_colab.ipynb`
+3. comprovar al notebook:
+   - dataset detectat
+   - recompte de files per CSV (`csv_row_counts`)
+   - `V2_LLM_USE_LEGACY_INTERFACE=false`
+   - `V2_LLM_REPAIR_ON_VALIDATION_ERROR=true`
+4. arrencar `run_worker_loop.py`
+5. crear una `execution_request` des del monitor
+6. seguir l'execució amb:
+   - monitor web
+   - events recents
+   - autòpsia final
+
+Perfils de prova recomanats:
+
+- `1x2` o `2x2` per validar prompt, phase0, repair i training sense massa espera
+- `3x2` per validar intercalat generació/training
+- `10x2` només quan el flux curt ja és estable
+
+Com interpretar una execució:
+
+- `generation 0` és baseline; no crea models nous
+- `generation 1..N` creen models nous
+- `validated_phase0` vol dir model generat i validat estructuralment
+- `training` vol dir que el trainer l'està executant realment
+- `trained` vol dir que hi ha model entrenat i metadades persistides
+- `rejected` vol dir que ha fallat a `phase0` o al trainer
+- `model_repair_enqueued` vol dir que una proposal fallida ha estat reparada o reemplaçada i reenviada a `phase0`
+- `training_drain_wait_started` vol dir que la generació ja ha acabat però encara s'estan buidant models pendents d'entrenar
+
+Senyal de bona salut:
+
+- apareix `run_id`
+- es creen proposals (`llm_proposal_created`)
+- hi ha `proposal_phase0_auto_processed`
+- hi ha `model_training_started` i `model_training_epoch_start/end`
+- el run només passa a `run_completed` quan la cua de training està buidada
+
+Senyal de problema:
+
+- request molt temps a `starting_trial` sense `run_id`
+- `429` d'OpenAI repetits
+- proposals que fallen per errors estructurals i no entren a repair/replacement
+- run marcat `completed` amb molts models encara a `validated_phase0` o `training`
+
+Documents útils per continuar:
+
+- `docs/execution_control_plane.md`
+- `colab-worker/README.md`
+- `ops/scripts/run_e2e_final_smoke.py`
+
 ## Layout de dades
 
 Per executar el pipeline complet (validacions de models i entrenament de propostes) cal disposar d'uns fitxers CSV de dades.
