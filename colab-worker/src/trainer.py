@@ -352,8 +352,80 @@ class ModelTrainerEngine:
             all_data = derive_additional_features_and_targets(raw_sources, input_cfg, output_cfg)
             self._experiment_config_cache = exp_config
             self._all_data_cache = all_data
+            
+            # Step 2: Global pre-scaling after loading data
+            try:
+                print("⚖️ Iniciant pre-escalat global de dades per a tots els inputs i targets...")
+                self._prewarm_all_scaled_data(exp_config, all_data)
+                print("✅ Pre-escalat global completat.")
+            except Exception as pe:
+                print(f"⚠️ Error durant el pre-escalat global: {pe}")
+
             self._data_prewarm_completed = True
             return exp_config, all_data
+
+    def _prewarm_all_scaled_data(self, exp_config: dict[str, Any], all_data: dict[str, Any]) -> None:
+        (
+            _, _, _, split_and_scale_data, _
+        ) = self._load_legacy_training_utils()
+        
+        # We need sample count to get split indices
+        first_key = next(iter(all_data)) if all_data else None
+        if not first_key:
+            return
+        n_samples = all_data[first_key].shape[0]
+        
+        # Use a dummy model def to get a stable seed from experiment config
+        dummy_model_def = {"training_config": {"seed": exp_config.get("global_seed", 42)}}
+        split_indices = self._get_or_build_split_indices(n_samples, exp_config, dummy_model_def)
+        
+        # 1. Warm up input features
+        input_cfg = exp_config.get("input_features_config", [])
+        for feat in input_cfg:
+            name = feat.get("feature_name")
+            if not name or name not in all_data:
+                continue
+            # We treat each feature as a single input to warm up the cache
+            arr = all_data[name]
+            if arr.size == 0:
+                continue
+            
+            # Use feature_name as cache key prefix
+            cache_key = f"{name}:global"
+            if cache_key in self._scaled_input_cache:
+                continue
+                
+            split_and_scale_data(
+                [arr], [np.zeros((n_samples, 1), dtype=np.float32)], 
+                ["input"], exp_config, dummy_model_def,
+                split_indices=split_indices,
+                scaled_input_cache=self._scaled_input_cache,
+                input_cache_keys=[cache_key]
+            )
+
+        # 2. Warm up output targets (optional but useful if they are many)
+        output_cfg = exp_config.get("output_targets_config", [])
+        for target in output_cfg:
+            name = target.get("target_name")
+            if not name or name not in all_data:
+                continue
+            arr = all_data[name]
+            if arr.size == 0:
+                continue
+            
+            cache_key = f"{name}:global"
+            if cache_key in self._scaled_input_cache:
+                continue
+                
+            # For targets we might not need scaling in some models, 
+            # but pre-scaling them doesn't hurt if we use the same cache mechanism
+            split_and_scale_data(
+                [arr], [np.zeros((n_samples, 1), dtype=np.float32)], 
+                ["target"], exp_config, dummy_model_def,
+                split_indices=split_indices,
+                scaled_input_cache=self._scaled_input_cache,
+                input_cache_keys=[cache_key]
+            )
 
     def _start_background_data_prewarm(self) -> None:
         if self._data_prewarm_started:
@@ -424,7 +496,7 @@ class ModelTrainerEngine:
             arr = all_data.get(source_feature_name)
             if arr is None or getattr(arr, "size", 0) == 0:
                 continue
-            keys.append(f"{source_feature_name}:{input_layer_name}")
+            keys.append(f"{source_feature_name}:global")
         return keys
 
     def _runtime_training_limits(self) -> tuple[int, int]:

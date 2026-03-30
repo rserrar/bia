@@ -130,7 +130,7 @@ def split_and_scale_data(
     )
 
     def select(parts: list[np.ndarray], idx: np.ndarray) -> list[np.ndarray]:
-        return [arr[idx] if arr.size > 0 else arr for arr in parts]
+        return [arr[idx].astype(np.float32) if arr.size > 0 else arr.astype(np.float32) for arr in parts]
 
     x_train = select(x_model_list, train_idx)
     y_train = select(y_model_list, train_idx)
@@ -149,14 +149,17 @@ def split_and_scale_data(
     for idx, arr_train in enumerate(x_train):
         if arr_train.size == 0:
             _debug_log(f"input_{idx}: empty tensor, skipping scaling")
-            x_train_scaled.append(arr_train)
-            x_val_scaled.append(x_val[idx])
-            x_test_scaled.append(x_test[idx])
+            x_train_scaled.append(arr_train.astype(np.float32))
+            x_val_scaled.append(x_val[idx].astype(np.float32))
+            x_test_scaled.append(x_test[idx].astype(np.float32))
             continue
         cache_key = input_cache_keys[idx] if isinstance(input_cache_keys, list) and idx < len(input_cache_keys) else f"input_{idx}"
         if scaled_input_cache is not None and cache_key in scaled_input_cache:
             cached_train, cached_val, cached_test = scaled_input_cache[cache_key]
             _debug_log(f"input_{idx}: reusing cached scaled tensors for key={cache_key}")
+            # Ensure we don't modify the cache if we do operations later, 
+            # though here we just want to avoid double memory.
+            # But the trainer calls .clear() on the list, so we must be careful.
             x_train_scaled.append(cached_train)
             x_val_scaled.append(cached_val)
             x_test_scaled.append(cached_test)
@@ -165,7 +168,7 @@ def split_and_scale_data(
         train_shape = arr_train.shape
         train_flat = arr_train.reshape(-1, train_shape[-1]) if arr_train.ndim > 2 else arr_train.reshape(train_shape[0], -1)
         _debug_log(f"input_{idx}: fit_transform start shape={train_shape} flat={train_flat.shape}")
-        train_scaled = scaler.fit_transform(train_flat).reshape(train_shape)
+        train_scaled = scaler.fit_transform(train_flat).reshape(train_shape).astype(np.float32)
         x_train_scaled.append(train_scaled)
         _debug_log(f"input_{idx}: fit_transform done")
 
@@ -174,20 +177,20 @@ def split_and_scale_data(
             val_shape = val_arr.shape
             val_flat = val_arr.reshape(-1, val_shape[-1]) if val_arr.ndim > 2 else val_arr.reshape(val_shape[0], -1)
             _debug_log(f"input_{idx}: validation transform start shape={val_shape} flat={val_flat.shape}")
-            x_val_scaled.append(scaler.transform(val_flat).reshape(val_shape))
+            x_val_scaled.append(scaler.transform(val_flat).reshape(val_shape).astype(np.float32))
             _debug_log(f"input_{idx}: validation transform done")
         else:
-            x_val_scaled.append(val_arr)
+            x_val_scaled.append(val_arr.astype(np.float32))
 
         test_arr = x_test[idx]
         if test_arr.size > 0:
             test_shape = test_arr.shape
             test_flat = test_arr.reshape(-1, test_shape[-1]) if test_arr.ndim > 2 else test_arr.reshape(test_shape[0], -1)
             _debug_log(f"input_{idx}: test transform start shape={test_shape} flat={test_flat.shape}")
-            x_test_scaled.append(scaler.transform(test_flat).reshape(test_shape))
+            x_test_scaled.append(scaler.transform(test_flat).reshape(test_shape).astype(np.float32))
             _debug_log(f"input_{idx}: test transform done")
         else:
-            x_test_scaled.append(test_arr)
+            x_test_scaled.append(test_arr.astype(np.float32))
         scalers[f"input_{idx}"] = scaler
         if scaled_input_cache is not None:
             scaled_input_cache[cache_key] = (x_train_scaled[-1], x_val_scaled[-1], x_test_scaled[-1])
