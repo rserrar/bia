@@ -7,6 +7,10 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
 
 
+def _debug_log(message: str) -> None:
+    print(f"[data-prep] {message}")
+
+
 def prepare_model_specific_inputs_outputs(
     all_loaded_data: dict[str, np.ndarray],
     model_json_definition: dict[str, Any],
@@ -100,6 +104,11 @@ def split_and_scale_data(
     test_split = float(eval_params.get("test_split", 0.10))
     seed = int(model_json_definition.get("training_config", {}).get("seed", experiment_config.get("global_seed", 42)))
 
+    _debug_log(
+        f"split_and_scale_data start: samples={n_samples}, inputs={len(x_model_list)}, outputs={len(y_model_list)}, "
+        f"val_split={val_split}, test_split={test_split}, seed={seed}"
+    )
+
     indices = np.arange(n_samples)
     train_val_idx, test_idx = train_test_split(indices, test_size=test_split, random_state=seed, shuffle=True)
     if val_split > 0 and len(train_val_idx) >= 2:
@@ -109,6 +118,10 @@ def split_and_scale_data(
     else:
         train_idx = train_val_idx
         val_idx = np.array([], dtype=int)
+
+    _debug_log(
+        f"index split done: train={len(train_idx)}, val={len(val_idx)}, test={len(test_idx)}"
+    )
 
     def select(parts: list[np.ndarray], idx: np.ndarray) -> list[np.ndarray]:
         return [arr[idx] if arr.size > 0 else arr for arr in parts]
@@ -120,6 +133,8 @@ def split_and_scale_data(
     x_test = select(x_model_list, test_idx)
     y_test = select(y_model_list, test_idx)
 
+    _debug_log("array slicing done; starting scaling per input tensor")
+
     scalers: dict[str, MinMaxScaler] = {}
     x_train_scaled: list[np.ndarray] = []
     x_val_scaled: list[np.ndarray] = []
@@ -127,6 +142,7 @@ def split_and_scale_data(
 
     for idx, arr_train in enumerate(x_train):
         if arr_train.size == 0:
+            _debug_log(f"input_{idx}: empty tensor, skipping scaling")
             x_train_scaled.append(arr_train)
             x_val_scaled.append(x_val[idx])
             x_test_scaled.append(x_test[idx])
@@ -134,14 +150,18 @@ def split_and_scale_data(
         scaler = MinMaxScaler()
         train_shape = arr_train.shape
         train_flat = arr_train.reshape(-1, train_shape[-1]) if arr_train.ndim > 2 else arr_train.reshape(train_shape[0], -1)
+        _debug_log(f"input_{idx}: fit_transform start shape={train_shape} flat={train_flat.shape}")
         train_scaled = scaler.fit_transform(train_flat).reshape(train_shape)
         x_train_scaled.append(train_scaled)
+        _debug_log(f"input_{idx}: fit_transform done")
 
         val_arr = x_val[idx]
         if val_arr.size > 0:
             val_shape = val_arr.shape
             val_flat = val_arr.reshape(-1, val_shape[-1]) if val_arr.ndim > 2 else val_arr.reshape(val_shape[0], -1)
+            _debug_log(f"input_{idx}: validation transform start shape={val_shape} flat={val_flat.shape}")
             x_val_scaled.append(scaler.transform(val_flat).reshape(val_shape))
+            _debug_log(f"input_{idx}: validation transform done")
         else:
             x_val_scaled.append(val_arr)
 
@@ -149,9 +169,13 @@ def split_and_scale_data(
         if test_arr.size > 0:
             test_shape = test_arr.shape
             test_flat = test_arr.reshape(-1, test_shape[-1]) if test_arr.ndim > 2 else test_arr.reshape(test_shape[0], -1)
+            _debug_log(f"input_{idx}: test transform start shape={test_shape} flat={test_flat.shape}")
             x_test_scaled.append(scaler.transform(test_flat).reshape(test_shape))
+            _debug_log(f"input_{idx}: test transform done")
         else:
             x_test_scaled.append(test_arr)
         scalers[f"input_{idx}"] = scaler
+
+    _debug_log("split_and_scale_data completed")
 
     return (x_train_scaled, y_train), (x_val_scaled, y_val), (x_test_scaled, y_test), scalers
