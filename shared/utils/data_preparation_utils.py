@@ -82,6 +82,9 @@ def split_and_scale_data(
     _model_input_keras_names: list[str],
     experiment_config: dict[str, Any],
     model_json_definition: dict[str, Any],
+    split_indices: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
+    scaled_input_cache: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] | None = None,
+    input_cache_keys: list[str] | None = None,
 ) -> tuple[
     tuple[list[np.ndarray], list[np.ndarray]],
     tuple[list[np.ndarray], list[np.ndarray]],
@@ -109,15 +112,18 @@ def split_and_scale_data(
         f"val_split={val_split}, test_split={test_split}, seed={seed}"
     )
 
-    indices = np.arange(n_samples)
-    train_val_idx, test_idx = train_test_split(indices, test_size=test_split, random_state=seed, shuffle=True)
-    if val_split > 0 and len(train_val_idx) >= 2:
-        effective_val = val_split / max(1e-6, (1.0 - test_split))
-        effective_val = min(max(effective_val, 0.0), 0.9)
-        train_idx, val_idx = train_test_split(train_val_idx, test_size=effective_val, random_state=seed, shuffle=True)
+    if split_indices is not None:
+        train_idx, val_idx, test_idx = split_indices
     else:
-        train_idx = train_val_idx
-        val_idx = np.array([], dtype=int)
+        indices = np.arange(n_samples)
+        train_val_idx, test_idx = train_test_split(indices, test_size=test_split, random_state=seed, shuffle=True)
+        if val_split > 0 and len(train_val_idx) >= 2:
+            effective_val = val_split / max(1e-6, (1.0 - test_split))
+            effective_val = min(max(effective_val, 0.0), 0.9)
+            train_idx, val_idx = train_test_split(train_val_idx, test_size=effective_val, random_state=seed, shuffle=True)
+        else:
+            train_idx = train_val_idx
+            val_idx = np.array([], dtype=int)
 
     _debug_log(
         f"index split done: train={len(train_idx)}, val={len(val_idx)}, test={len(test_idx)}"
@@ -147,6 +153,14 @@ def split_and_scale_data(
             x_val_scaled.append(x_val[idx])
             x_test_scaled.append(x_test[idx])
             continue
+        cache_key = input_cache_keys[idx] if isinstance(input_cache_keys, list) and idx < len(input_cache_keys) else f"input_{idx}"
+        if scaled_input_cache is not None and cache_key in scaled_input_cache:
+            cached_train, cached_val, cached_test = scaled_input_cache[cache_key]
+            _debug_log(f"input_{idx}: reusing cached scaled tensors for key={cache_key}")
+            x_train_scaled.append(cached_train)
+            x_val_scaled.append(cached_val)
+            x_test_scaled.append(cached_test)
+            continue
         scaler = MinMaxScaler()
         train_shape = arr_train.shape
         train_flat = arr_train.reshape(-1, train_shape[-1]) if arr_train.ndim > 2 else arr_train.reshape(train_shape[0], -1)
@@ -175,6 +189,8 @@ def split_and_scale_data(
         else:
             x_test_scaled.append(test_arr)
         scalers[f"input_{idx}"] = scaler
+        if scaled_input_cache is not None:
+            scaled_input_cache[cache_key] = (x_train_scaled[-1], x_val_scaled[-1], x_test_scaled[-1])
 
     _debug_log("split_and_scale_data completed")
 

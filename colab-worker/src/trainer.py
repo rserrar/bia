@@ -261,6 +261,8 @@ class ModelTrainerEngine:
         self._data_cache_lock = threading.Lock()
         self._data_prewarm_started = False
         self._data_prewarm_completed = False
+        self._split_indices_cache: tuple[Any, Any, Any] | None = None
+        self._scaled_input_cache: dict[str, tuple[Any, Any, Any]] = {}
         self.llm = LlmProposalClient(
             LlmConfig(
                 enabled=os.getenv("V2_LLM_ENABLED", "false").lower() in {"1", "true", "yes"},
@@ -381,6 +383,49 @@ class ModelTrainerEngine:
             except Exception:
                 pass
         gc.collect()
+
+    def _get_or_build_split_indices(self, n_samples: int, experiment_config: dict[str, Any], model_json_definition: dict[str, Any]) -> tuple[Any, Any, Any]:
+        if self._split_indices_cache is not None:
+            return self._split_indices_cache
+        try:
+            import numpy as np
+            from sklearn.model_selection import train_test_split
+        except Exception as error:
+            raise RuntimeError(f"Missing numpy/sklearn for split indices: {error}") from error
+
+        eval_params = experiment_config.get("evaluator_params", {}) if isinstance(experiment_config, dict) else {}
+        val_split = float(eval_params.get("validation_split", 0.15))
+        test_split = float(eval_params.get("test_split", 0.10))
+        seed = int(model_json_definition.get("training_config", {}).get("seed", experiment_config.get("global_seed", 42)))
+        indices = np.arange(n_samples)
+        train_val_idx, test_idx = train_test_split(indices, test_size=test_split, random_state=seed, shuffle=True)
+        if val_split > 0 and len(train_val_idx) >= 2:
+            effective_val = val_split / max(1e-6, (1.0 - test_split))
+            effective_val = min(max(effective_val, 0.0), 0.9)
+            train_idx, val_idx = train_test_split(train_val_idx, test_size=effective_val, random_state=seed, shuffle=True)
+        else:
+            train_idx = train_val_idx
+            val_idx = np.array([], dtype=int)
+        self._split_indices_cache = (train_idx, val_idx, test_idx)
+        print(f"🧮 Split indices cachejats: train={len(train_idx)} val={len(val_idx)} test={len(test_idx)}")
+        return self._split_indices_cache
+
+    def _resolve_input_cache_keys(self, all_data: dict[str, Any], model_definition: dict[str, Any]) -> list[str]:
+        keys: list[str] = []
+        architecture_raw = model_definition.get("architecture_definition")
+        architecture = architecture_raw if isinstance(architecture_raw, dict) else {}
+        for input_conf in architecture.get("used_inputs", []) if isinstance(architecture.get("used_inputs"), list) else []:
+            if not isinstance(input_conf, dict):
+                continue
+            source_feature_name = str(input_conf.get("source_feature_name", "")).strip()
+            input_layer_name = str(input_conf.get("input_layer_name", "")).strip()
+            if source_feature_name == "" or input_layer_name == "":
+                continue
+            arr = all_data.get(source_feature_name)
+            if arr is None or getattr(arr, "size", 0) == 0:
+                continue
+            keys.append(f"{source_feature_name}:{input_layer_name}")
+        return keys
 
     def _runtime_training_limits(self) -> tuple[int, int]:
         max_epochs = self.max_epochs_per_model
@@ -793,7 +838,18 @@ class ModelTrainerEngine:
             print(f"✅ prepare_model_specific_inputs_outputs complet per {proposal_id} en {prepare_inputs_seconds}s")
             split_started_at = time.time()
             print(f"⚖️ Inici split_and_scale_data per {proposal_id}")
-            (X_train, Y_train), (X_val, Y_val), (X_test, Y_test), scalers = split_and_scale_data(X_list, Y_list, in_names, exp_config, model_def)
+            split_indices = self._get_or_build_split_indices(X_list[0].shape[0], exp_config, model_def) if X_list else None
+            input_cache_keys = self._resolve_input_cache_keys(all_data, model_def)
+            (X_train, Y_train), (X_val, Y_val), (X_test, Y_test), scalers = split_and_scale_data(
+                X_list,
+                Y_list,
+                in_names,
+                exp_config,
+                model_def,
+                split_indices=split_indices,
+                scaled_input_cache=self._scaled_input_cache,
+                input_cache_keys=input_cache_keys,
+            )
             split_and_scale_seconds = round(time.time() - split_started_at, 3)
             print(f"✅ split_and_scale_data complet per {proposal_id} en {split_and_scale_seconds}s")
             data_prep_seconds = round(time.time() - data_prep_started_at, 3)
