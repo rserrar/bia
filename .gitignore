@@ -11,3 +11,4 @@ Thumbs.db
 server-api/state/
 colab-worker/checkpoints/
 *.log
+*.npy
