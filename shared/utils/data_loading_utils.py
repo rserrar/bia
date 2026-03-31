@@ -37,13 +37,13 @@ def load_all_raw_data_sources(
         try:
             # Check if binary cache exists and is valid (not older than CSV)
             if os.path.exists(npy_path) and os.path.getmtime(npy_path) >= os.path.getmtime(file_path):
-                # Use mmap_mode='r' to save memory if the user wants, but here we want it in RAM 
-                # for the speed benefit mentioned by the user.
-                arr = np.load(npy_path)
+                # Use mmap_mode='r' to save real RAM. The OS will handle the memory mapping.
+                arr = np.load(npy_path, mmap_mode='r')
                 if arr.dtype != np.float32:
-                    arr = arr.astype(np.float32)
+                    # If it's not float32, we do need to load it and convert it
+                    arr = np.load(npy_path).astype(np.float32)
                 loaded_data[csv_key] = arr
-                print(f"✅ Cache binària carregada: {file_name}.npy ({len(arr)} files)")
+                print(f"✅ Cache binària (mmap) carregada: {file_name}.npy ({len(arr)} files)")
                 continue
             
             # If not in cache or cache stale, load CSV
@@ -93,15 +93,15 @@ def derive_additional_features_and_targets(
         slice_params = feat_conf.get("slice_params")
         if isinstance(derive_col, int):
             if source.ndim == 2 and source.shape[1] > derive_col:
-                data_dict[feature_name] = source[:, derive_col : derive_col + 1].astype(np.float32)
+                data_dict[feature_name] = source[:, derive_col : derive_col + 1]
             else:
                 data_dict[feature_name] = np.array([], dtype=np.float32)
         elif isinstance(slice_params, list) and len(slice_params) == 2:
             start = slice_params[0]
             end = slice_params[1]
-            data_dict[feature_name] = source[:, slice(start, end)].astype(np.float32)
+            data_dict[feature_name] = source[:, slice(start, end)]
         else:
-            data_dict[feature_name] = source.astype(np.float32)
+            data_dict[feature_name] = source
 
     for target_conf in output_targets_cfg:
         target_name = str(target_conf.get("target_name", "")).strip()
@@ -116,8 +116,8 @@ def derive_additional_features_and_targets(
         if isinstance(slice_params, list) and len(slice_params) == 2:
             start = slice_params[0]
             end = slice_params[1]
-            data_dict[target_name] = source[:, slice(start, end)].astype(np.float32)
+            data_dict[target_name] = source[:, slice(start, end)]
         else:
-            data_dict[target_name] = source.astype(np.float32)
+            data_dict[target_name] = source
 
     return data_dict
