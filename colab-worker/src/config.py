@@ -156,7 +156,7 @@ def load_worker_config() -> WorkerConfig:
         llm_experiment_config_file=os.getenv("V2_LLM_EXPERIMENT_CONFIG_FILE", "configs/experiment_config.json"),
         llm_num_new_models=int(os.getenv("V2_LLM_NUM_NEW_MODELS", "1")),
         llm_num_reference_models=int(os.getenv("V2_LLM_NUM_REFERENCE_MODELS", "3")),
-        llm_min_interval_seconds=int(os.getenv("V2_LLM_MIN_INTERVAL_SECONDS", "20")),
+        llm_min_interval_seconds=int(os.getenv("V2_LLM_MIN_INTERVAL_SECONDS", "30")),
         llm_repair_on_validation_error=os.getenv("V2_LLM_REPAIR_ON_VALIDATION_ERROR", "true").lower() in {"1", "true", "yes"},
         verify_legacy_model_build=os.getenv("V2_VERIFY_LEGACY_MODEL_BUILD", "").lower() in {"1", "true", "yes"},
         legacy_build_check_strict=os.getenv("V2_LEGACY_BUILD_CHECK_STRICT", "").lower() in {"1", "true", "yes"},

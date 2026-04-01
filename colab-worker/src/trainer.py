@@ -322,6 +322,8 @@ class ModelTrainerEngine:
         self._data_prewarm_completed = False
         self._split_indices_cache: tuple[Any, Any, Any] | None = None
         self._scaled_input_cache: dict[str, tuple[Any, Any, Any]] = {}
+        self._llm_last_call_ts = 0.0
+        self.llm_min_interval_seconds = max(0, int(os.getenv("V2_LLM_MIN_INTERVAL_SECONDS", "30")))
         self.llm = LlmProposalClient(
             LlmConfig(
                 enabled=os.getenv("V2_LLM_ENABLED", "false").lower() in {"1", "true", "yes"},
@@ -347,6 +349,16 @@ class ModelTrainerEngine:
                 repair_on_validation_error=os.getenv("V2_LLM_REPAIR_ON_VALIDATION_ERROR", "true").lower() in {"1", "true", "yes"},
             )
         )
+
+    def _respect_llm_min_interval(self) -> None:
+        if self.llm_min_interval_seconds <= 0 or self._llm_last_call_ts <= 0:
+            return
+        elapsed = time.time() - self._llm_last_call_ts
+        if elapsed < self.llm_min_interval_seconds:
+            time.sleep(self.llm_min_interval_seconds - elapsed)
+
+    def _mark_llm_call_started(self) -> None:
+        self._llm_last_call_ts = time.time()
 
     def _load_legacy_training_utils(self) -> tuple[Any, Any, Any, Any, Any]:
         if self._legacy_utils_cache is not None:
@@ -642,6 +654,8 @@ class ModelTrainerEngine:
             mode = "repair"
             if attempt == 0:
                 try:
+                    self._respect_llm_min_interval()
+                    self._mark_llm_call_started()
                     candidate_to_submit = self.llm._repair_candidate_after_validation_error(original_candidate, error_message, context)
                     print(f"🔧 Resposta de repair rebuda per {proposal.get('proposal_id', '')} (intent {attempt + 1})")
                 except Exception as repair_error:
@@ -650,6 +664,8 @@ class ModelTrainerEngine:
             else:
                 mode = "replacement"
                 try:
+                    self._respect_llm_min_interval()
+                    self._mark_llm_call_started()
                     candidate_to_submit = self.llm.generate_candidate(context)
                     print(f"🆕 Reemplaç generat per {proposal.get('proposal_id', '')} (intent {attempt + 1})")
                 except Exception as replacement_error:

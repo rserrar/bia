@@ -66,6 +66,17 @@ class EvolutionWorkerEngine:
             )
         )
 
+    def _respect_llm_min_interval(self) -> None:
+        min_interval = max(0, int(self.config.llm_min_interval_seconds))
+        if min_interval <= 0 or self.last_llm_call_ts <= 0:
+            return
+        elapsed = time.time() - self.last_llm_call_ts
+        if elapsed < min_interval:
+            time.sleep(min_interval - elapsed)
+
+    def _mark_llm_call_started(self) -> None:
+        self.last_llm_call_ts = time.time()
+
     def _load_state(self) -> WorkerState:
         data = self.checkpoints.load()
         if not data:
@@ -189,16 +200,12 @@ class EvolutionWorkerEngine:
     def _create_model_proposal_if_enabled(self, run_id: str, generation: int, metrics: dict[str, float | int]) -> None:
         if not self.config.llm_enabled:
             return
-        min_interval = max(0, int(self.config.llm_min_interval_seconds))
         proposals_per_generation = max(1, int(self.config.llm_num_new_models))
         reference_models, reference_trace = self._collect_reference_models_for_prompt(run_id)
         recent_generated_models = self._collect_recent_generated_models(run_id)
 
         for candidate_index in range(proposals_per_generation):
-            if min_interval > 0 and self.last_llm_call_ts > 0:
-                elapsed = time.time() - self.last_llm_call_ts
-                if elapsed < min_interval:
-                    time.sleep(min_interval - elapsed)
+            self._respect_llm_min_interval()
 
             context = {
                 "run_id": run_id,
@@ -213,7 +220,7 @@ class EvolutionWorkerEngine:
             }
 
             try:
-                self.last_llm_call_ts = time.time()
+                self._mark_llm_call_started()
                 print(
                     f"🤖 Fent petició al LLM per generar proposta {candidate_index + 1}/{proposals_per_generation} "
                     f"de la generació {generation}."
@@ -653,6 +660,8 @@ class EvolutionWorkerEngine:
             mode = "repair" if attempt == 0 else "replacement"
             candidate_to_submit: dict[str, Any] | None = None
             try:
+                self._respect_llm_min_interval()
+                self._mark_llm_call_started()
                 if attempt == 0:
                     candidate_to_submit = self.llm._repair_candidate_after_validation_error(original_candidate, rejection_reason, context)
                     print(f"🔧 Repair phase0 rebutjat rebut per {proposal.get('proposal_id', '')} (intent {attempt + 1})")

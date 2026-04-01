@@ -1482,7 +1482,7 @@ final class ApiService
             'resume_enabled' => (bool) ($config['resume_enabled'] ?? true),
             'bootstrap_seed_model_if_empty' => (bool) ($config['bootstrap_seed_model_if_empty'] ?? false),
             'auto_process_proposals_phase0' => (bool) ($config['auto_process_proposals_phase0'] ?? true),
-            'llm_min_interval_seconds' => max(0, (int) ($config['llm_min_interval_seconds'] ?? 20)),
+            'llm_min_interval_seconds' => max(0, (int) ($config['llm_min_interval_seconds'] ?? 30)),
             'execution_mode' => (string) ($config['execution_mode'] ?? 'once'),
             'dataset_mode' => (string) ($config['dataset_mode'] ?? 'small_subset'),
             'type_description' => $this->executionTypeDescription($type),

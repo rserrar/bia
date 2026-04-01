@@ -135,7 +135,7 @@ def main() -> int:
     os.environ["V2_LLM_MODEL"] = os.getenv("V2_LLM_TRIAL_MODEL", os.getenv("V2_LLM_MODEL", "gpt-5.4"))
     raw_endpoint = os.getenv("V2_LLM_TRIAL_ENDPOINT", os.getenv("V2_LLM_ENDPOINT", "https://api.openai.com/v1/chat/completions"))
     os.environ["V2_LLM_ENDPOINT"] = _clean_endpoint(raw_endpoint) or "https://api.openai.com/v1/chat/completions"
-    os.environ["V2_LLM_MIN_INTERVAL_SECONDS"] = os.getenv("V2_LLM_MIN_INTERVAL_SECONDS", "20")
+    os.environ["V2_LLM_MIN_INTERVAL_SECONDS"] = os.getenv("V2_LLM_MIN_INTERVAL_SECONDS", "30")
     os.environ["V2_AUTO_PROCESS_PROPOSALS_PHASE0"] = "true"
     provider = os.getenv("V2_LLM_PROVIDER", "openai").strip().lower()
     if provider != "mock":
