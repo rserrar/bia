@@ -656,7 +656,9 @@ class EvolutionWorkerEngine:
             "proposal": proposal.get("proposal") if isinstance(proposal.get("proposal"), dict) else {},
             "llm_metadata": llm_metadata,
         }
-        for attempt in range(3):
+        max_attempts = max(3, int(os.getenv("V2_PHASE0_REPAIR_MAX_ATTEMPTS", "4")))
+        retry_delay_seconds = max(1, int(os.getenv("V2_PHASE0_REPAIR_RETRY_DELAY_SECONDS", "5")))
+        for attempt in range(max_attempts):
             mode = "repair" if attempt == 0 else "replacement"
             candidate_to_submit: dict[str, Any] | None = None
             try:
@@ -671,17 +673,23 @@ class EvolutionWorkerEngine:
             except Exception as error:
                 print(f"❌ Intent {attempt + 1} de phase0 repair/replacement fallit per {proposal.get('proposal_id', '')}: {error}")
                 self.api.add_event(run_id, "phase0_repair_failed", f"Intent {attempt + 1} de repair/replacement fallit", {"proposal_id": proposal.get("proposal_id"), "attempt": attempt + 1, "mode": mode, "error": str(error)})
+                if attempt + 1 < max_attempts:
+                    time.sleep(retry_delay_seconds)
                 continue
             if not isinstance(candidate_to_submit, dict):
+                if attempt + 1 < max_attempts:
+                    time.sleep(retry_delay_seconds)
                 continue
             created = self._submit_phase0_repaired_candidate(run_id, proposal, candidate_to_submit, rejection_reason, repair_depth, mode, attempt + 1)
             if created is not None:
                 return
+            if attempt + 1 < max_attempts:
+                time.sleep(retry_delay_seconds)
         self.api.add_event(
             run_id,
             "phase0_repair_exhausted",
             f"No s'ha pogut reparar proposal rebutjada a phase0: {proposal.get('proposal_id', '')}",
-            {"proposal_id": proposal.get("proposal_id"), "reason": rejection_reason},
+            {"proposal_id": proposal.get("proposal_id"), "reason": rejection_reason, "attempts": max_attempts},
         )
 
     def _submit_phase0_repaired_candidate(

@@ -649,7 +649,9 @@ class ModelTrainerEngine:
             pass
         print(f"🩹 Intentant reparar o reemplaçar {proposal.get('proposal_id', '')} després de l'error: {error_message}")
 
-        for attempt in range(4):
+        max_attempts = max(4, int(os.getenv("V2_TRAINING_REPAIR_MAX_ATTEMPTS", "5")))
+        retry_delay_seconds = max(1, int(os.getenv("V2_TRAINING_REPAIR_RETRY_DELAY_SECONDS", "5")))
+        for attempt in range(max_attempts):
             candidate_to_submit: dict[str, Any] | None = None
             mode = "repair"
             if attempt == 0:
@@ -673,17 +675,21 @@ class ModelTrainerEngine:
                     self.api.add_event(run_id, "model_repair_failed", f"Generació reemplaçament fallida per {proposal.get('proposal_id', '')}", {"error": str(replacement_error), "attempt": attempt + 1})
 
             if not isinstance(candidate_to_submit, dict):
+                if attempt + 1 < max_attempts:
+                    time.sleep(retry_delay_seconds)
                 continue
             submitted_id = self._submit_repaired_candidate(run_id, proposal, candidate_to_submit, error_message, repair_depth, mode, attempt + 1)
             if submitted_id is not None:
                 return True
+            if attempt + 1 < max_attempts:
+                time.sleep(retry_delay_seconds)
 
         try:
             self.api.add_event(
                 run_id,
                 "model_repair_exhausted",
                 f"No s'ha pogut reparar ni reemplaçar {proposal.get('proposal_id', '')}",
-                {"proposal_id": proposal.get("proposal_id"), "error": error_message},
+                {"proposal_id": proposal.get("proposal_id"), "error": error_message, "attempts": max_attempts},
             )
         except Exception:
             pass
