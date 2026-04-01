@@ -573,6 +573,7 @@ class EvolutionWorkerEngine:
             result = self.api.process_model_proposals_phase0(self.config.proposals_phase0_batch_size)
             processed_count = int(result.get("processed_count", 0))
             if processed_count > 0:
+                self._handle_phase0_rejections(result)
                 self.api.add_event(
                     run_id,
                     "proposal_phase0_auto_processed",
@@ -586,6 +587,169 @@ class EvolutionWorkerEngine:
                 "Error en processament automàtic de proposals queued_phase0",
                 {"error": str(error)},
             )
+
+    def _handle_phase0_rejections(self, result: dict[str, Any]) -> None:
+        run_id = self.state.run_id
+        if not run_id:
+            return
+        processed = result.get("processed") if isinstance(result.get("processed"), list) else []
+        for item in processed:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("status", "")) != "rejected":
+                continue
+            proposal_id = str(item.get("proposal_id", "")).strip()
+            if proposal_id == "":
+                continue
+            try:
+                proposal = self.api.get_model_proposal(proposal_id)
+            except Exception:
+                continue
+            try:
+                self._attempt_repair_rejected_phase0_proposal(proposal)
+            except Exception as repair_error:
+                print(f"⚠️ Repair phase0 fallit per {proposal_id}: {repair_error}")
+
+    def _attempt_repair_rejected_phase0_proposal(self, proposal: dict[str, Any]) -> None:
+        run_id = str(proposal.get("source_run_id", "")).strip() or self.state.run_id or ""
+        if run_id == "":
+            return
+        llm_metadata_raw = proposal.get("llm_metadata")
+        llm_metadata = llm_metadata_raw if isinstance(llm_metadata_raw, dict) else {}
+        repair_depth = int(llm_metadata.get("repair_depth", 0) or 0)
+        if repair_depth >= 1:
+            return
+        rejection_reason = str(llm_metadata.get("phase0_rejected_reason", "")).strip()
+        phase0_auto = llm_metadata.get("phase0_auto") if isinstance(llm_metadata.get("phase0_auto"), dict) else {}
+        if rejection_reason == "":
+            errors = phase0_auto.get("errors") if isinstance(phase0_auto.get("errors"), list) else []
+            rejection_reason = " | ".join(str(item) for item in errors if str(item).strip() != "")
+        if rejection_reason == "":
+            rejection_reason = "phase0_rejected"
+        print(f"🛠️ Intentant reparar proposal rebutjada a phase0 {proposal.get('proposal_id', '')}: {rejection_reason}")
+        self.api.add_event(
+            run_id,
+            "phase0_repair_started",
+            f"Intentant reparar proposal rebutjada a phase0: {proposal.get('proposal_id', '')}",
+            {"proposal_id": proposal.get("proposal_id"), "reason": rejection_reason},
+        )
+        references, selection_trace = self._collect_reference_models_for_prompt(run_id)
+        recent_generated_models = self._collect_recent_generated_models(run_id)
+        context = {
+            "generation": int(llm_metadata.get("from_generation", 0) or 0),
+            "run_id": run_id,
+            "code_version": self.config.code_version,
+            "reference_models": references,
+            "reference_selection_trace": selection_trace,
+            "recent_generated_models": recent_generated_models,
+            "latest_metrics": {},
+        }
+        original_candidate = {
+            "base_model_id": str(proposal.get("base_model_id", "")).strip() or "repair_base_model",
+            "proposal": proposal.get("proposal") if isinstance(proposal.get("proposal"), dict) else {},
+            "llm_metadata": llm_metadata,
+        }
+        for attempt in range(3):
+            mode = "repair" if attempt == 0 else "replacement"
+            candidate_to_submit: dict[str, Any] | None = None
+            try:
+                if attempt == 0:
+                    candidate_to_submit = self.llm._repair_candidate_after_validation_error(original_candidate, rejection_reason, context)
+                    print(f"🔧 Repair phase0 rebutjat rebut per {proposal.get('proposal_id', '')} (intent {attempt + 1})")
+                else:
+                    candidate_to_submit = self.llm.generate_candidate(context)
+                    print(f"🆕 Reemplaç phase0 generat per {proposal.get('proposal_id', '')} (intent {attempt + 1})")
+            except Exception as error:
+                print(f"❌ Intent {attempt + 1} de phase0 repair/replacement fallit per {proposal.get('proposal_id', '')}: {error}")
+                self.api.add_event(run_id, "phase0_repair_failed", f"Intent {attempt + 1} de repair/replacement fallit", {"proposal_id": proposal.get("proposal_id"), "attempt": attempt + 1, "mode": mode, "error": str(error)})
+                continue
+            if not isinstance(candidate_to_submit, dict):
+                continue
+            created = self._submit_phase0_repaired_candidate(run_id, proposal, candidate_to_submit, rejection_reason, repair_depth, mode, attempt + 1)
+            if created is not None:
+                return
+        self.api.add_event(
+            run_id,
+            "phase0_repair_exhausted",
+            f"No s'ha pogut reparar proposal rebutjada a phase0: {proposal.get('proposal_id', '')}",
+            {"proposal_id": proposal.get("proposal_id"), "reason": rejection_reason},
+        )
+
+    def _submit_phase0_repaired_candidate(
+        self,
+        run_id: str,
+        original_proposal: dict[str, Any],
+        candidate: dict[str, Any],
+        rejection_reason: str,
+        repair_depth: int,
+        mode: str,
+        attempt_number: int,
+    ) -> str | None:
+        base_model_id = str(candidate.get("base_model_id", original_proposal.get("base_model_id", "repair_base_model"))).strip() or "repair_base_model"
+        proposal_payload = candidate.get("proposal") if isinstance(candidate.get("proposal"), dict) else {}
+        if not proposal_payload:
+            return None
+        llm_metadata_raw = candidate.get("llm_metadata")
+        llm_metadata = llm_metadata_raw if isinstance(llm_metadata_raw, dict) else {}
+        llm_metadata["repair_depth"] = repair_depth + 1
+        llm_metadata["repaired_from_proposal_id"] = str(original_proposal.get("proposal_id", ""))
+        llm_metadata["repair_source_error"] = rejection_reason
+        llm_metadata["repair_mode"] = mode
+        llm_metadata["repair_attempt"] = attempt_number
+        fingerprint = self.llm.proposal_fingerprint(proposal_payload)
+        llm_metadata["proposal_fingerprint"] = fingerprint
+        if self._proposal_fingerprint_exists(run_id, fingerprint):
+            self.api.add_event(
+                run_id,
+                "phase0_repair_duplicate_skipped",
+                "Proposal reparada duplicada descartada",
+                {"proposal_id": original_proposal.get("proposal_id"), "repair_mode": mode, "attempt": attempt_number},
+            )
+            return None
+        created = self.api.create_model_proposal(
+            source_run_id=run_id,
+            base_model_id=base_model_id,
+            proposal=proposal_payload,
+            llm_metadata=llm_metadata,
+        )
+        proposal_id = str(created.get("proposal_id", "")).strip()
+        if proposal_id == "":
+            return None
+        self.api.enqueue_model_proposal_phase0(proposal_id)
+        try:
+            self.api.process_model_proposals_phase0(limit=1)
+        except Exception:
+            pass
+        refreshed = self.api.get_model_proposal(proposal_id)
+        refreshed_status = str(refreshed.get("status", ""))
+        if refreshed_status == "validated_phase0":
+            print(f"✅ Proposal reparada a phase0 validada: {proposal_id}")
+            try:
+                self.api.update_proposal_status(
+                    str(original_proposal.get("proposal_id", "")),
+                    str(original_proposal.get("status", "rejected")),
+                    {
+                        "phase0_repair_replacement_proposal_id": proposal_id,
+                        "phase0_repair_last_mode": mode,
+                        "phase0_repair_last_attempt": attempt_number,
+                    },
+                )
+            except Exception:
+                pass
+            self.api.add_event(
+                run_id,
+                "model_repair_enqueued",
+                f"Proposal reparada i reenviada a phase0: {proposal_id}",
+                {"original_proposal_id": original_proposal.get("proposal_id"), "repaired_proposal_id": proposal_id, "mode": mode, "attempt": attempt_number},
+            )
+            return proposal_id
+        self.api.add_event(
+            run_id,
+            "phase0_repair_failed",
+            f"Proposal reparada rebutjada a phase0: {proposal_id}",
+            {"original_proposal_id": original_proposal.get("proposal_id"), "repaired_proposal_id": proposal_id, "status": refreshed_status, "mode": mode, "attempt": attempt_number},
+        )
+        return None
 
     def _pending_training_counts(self, run_id: str) -> dict[str, int]:
         active_statuses = {"draft", "queued_phase0", "validated_phase0", "accepted", "training"}
