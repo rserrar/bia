@@ -1142,11 +1142,11 @@ class ModelTrainerEngine:
                 callbacks=cast(Any, callbacks)
             )
             elapsed = time.time() - start_t
-
-            if bool(getattr(feedback_callback, "stopped_by_time_limit", False)):
-                raise TimeoutError(
-                    f"model {proposal_id} exceeded max training time "
-                    f"({active_max_training_seconds}s) during fit"
+            time_limit_hit = bool(getattr(feedback_callback, "stopped_by_time_limit", False))
+            if time_limit_hit:
+                print(
+                    f"ℹ️ Model {proposal_id} aturat per límit de temps ({active_max_training_seconds}s). "
+                    "Es conserva el progrés i es continua amb el següent model."
                 )
 
             total_epochs_trained = len(history.history['loss']) if 'loss' in history.history else 0
@@ -1185,6 +1185,7 @@ class ModelTrainerEngine:
             metrics['effective_epochs_limit'] = int(epochs)
             metrics['original_model_epochs'] = int(original_epochs)
             metrics['configured_max_training_seconds'] = active_max_training_seconds
+            metrics['stopped_by_time_limit'] = time_limit_hit
             metrics['memory_mb_before_data_prep'] = memory_before_data_prep_mb
             metrics['memory_mb_after_data_prep'] = memory_after_data_prep_mb
             metrics['memory_mb_after_model_build'] = memory_after_model_build_mb
@@ -1244,6 +1245,7 @@ class ModelTrainerEngine:
                 "training_kpis": metrics,
                 "training_time": elapsed,
                 "total_epochs_trained": total_epochs_trained,
+                "training_stopped_by_time_limit": time_limit_hit,
                 "trained_model_uri": str(trained_model_path),
                 "trained_model_server_artifact_id": artifact_metadata.get("artifact_id"),
                 "trained_model_download_url": artifact_metadata.get("download_url"),
