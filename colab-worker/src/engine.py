@@ -700,6 +700,11 @@ class EvolutionWorkerEngine:
             return None
         llm_metadata_raw = candidate.get("llm_metadata")
         llm_metadata = llm_metadata_raw if isinstance(llm_metadata_raw, dict) else {}
+        original_metadata_raw = original_proposal.get("llm_metadata")
+        original_metadata = original_metadata_raw if isinstance(original_metadata_raw, dict) else {}
+        original_generation = int(original_metadata.get("from_generation", -1) or -1)
+        if original_generation >= 0:
+            llm_metadata["from_generation"] = original_generation
         llm_metadata["repair_depth"] = repair_depth + 1
         llm_metadata["repaired_from_proposal_id"] = str(original_proposal.get("proposal_id", ""))
         llm_metadata["repair_source_error"] = rejection_reason

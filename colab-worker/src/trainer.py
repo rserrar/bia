@@ -751,6 +751,11 @@ class ModelTrainerEngine:
             return None
         repaired_metadata_raw = candidate.get("llm_metadata")
         repaired_metadata = repaired_metadata_raw if isinstance(repaired_metadata_raw, dict) else {}
+        original_metadata_raw = proposal.get("llm_metadata")
+        original_metadata = original_metadata_raw if isinstance(original_metadata_raw, dict) else {}
+        original_generation = int(original_metadata.get("from_generation", -1) or -1)
+        if original_generation >= 0:
+            repaired_metadata["from_generation"] = original_generation
         repaired_metadata["repair_depth"] = repair_depth + 1
         repaired_metadata["repaired_from_proposal_id"] = str(proposal.get("proposal_id", ""))
         repaired_metadata["repair_source_error"] = error_message
