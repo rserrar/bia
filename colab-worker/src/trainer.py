@@ -77,6 +77,11 @@ class TrainerFeedbackAndLimitCallback(KerasCallback):  # type: ignore[misc]
         self.start_time = 0.0
         self.api = api_client
         self.run_id = run_id
+        self.heartbeat_seconds = max(5, int(os.getenv("V2_TRAINING_HEARTBEAT_SECONDS", "30")))
+        self.last_heartbeat_ts = 0.0
+        self.stopped_by_time_limit = False
+        self.stop_reason = ""
+        self._current_epoch = 0
 
     def _emit_event(self, event_type: str, label: str, details: dict[str, Any] | None = None) -> None:
         if self.api is None or self.run_id.strip() == "":
@@ -88,6 +93,9 @@ class TrainerFeedbackAndLimitCallback(KerasCallback):  # type: ignore[misc]
 
     def on_train_begin(self, logs=None):
         self.start_time = time.time()
+        self.last_heartbeat_ts = self.start_time
+        self.stopped_by_time_limit = False
+        self.stop_reason = ""
         print(f"\n🚀 Inciant entrenament pesat pel model {self.proposal_id}")
         if self.max_training_seconds > 0:
             print(f"⏱️ Límit establert a: {self.max_training_seconds} segons.")
@@ -98,12 +106,74 @@ class TrainerFeedbackAndLimitCallback(KerasCallback):  # type: ignore[misc]
         )
 
     def on_epoch_begin(self, epoch, logs=None):
+        self._current_epoch = int(epoch)
         print(f"🔄 Model {self.proposal_id} - Començant època {epoch + 1}...")
         self._emit_event(
             "model_training_epoch_start",
             f"Model {self.proposal_id} · inici època {epoch + 1}",
             {"proposal_id": self.proposal_id, "epoch": int(epoch + 1)},
         )
+
+    def _stop_for_time_limit(self, elapsed: float, epoch: int, batch: int) -> None:
+        if self.stopped_by_time_limit:
+            return
+        self.stopped_by_time_limit = True
+        self.stop_reason = "max_training_seconds_exceeded"
+        print(
+            f"🛑 ATENCIÓ: Temps límit d'entrenament superat en mig d'època "
+            f"({elapsed:.1f}s > {self.max_training_seconds}s). S'interromp l'entrenament."
+        )
+        self._emit_event(
+            "model_training_stopped_by_time_limit",
+            f"Model {self.proposal_id} aturat per límit de temps",
+            {
+                "proposal_id": self.proposal_id,
+                "elapsed_seconds": round(float(elapsed), 2),
+                "max_training_seconds": self.max_training_seconds,
+                "epoch": int(epoch + 1),
+                "batch": int(batch + 1),
+            },
+        )
+        model = getattr(self, "model", None)
+        if model is not None:
+            model.stop_training = True
+
+    def on_train_batch_end(self, batch, logs=None):
+        now = time.time()
+        elapsed = now - self.start_time
+        epoch = int(getattr(self, "_current_epoch", 0))
+        if self.max_training_seconds > 0 and elapsed > self.max_training_seconds:
+            self._stop_for_time_limit(elapsed, epoch, int(batch))
+            return
+        if now - self.last_heartbeat_ts < self.heartbeat_seconds:
+            return
+        self.last_heartbeat_ts = now
+        params = getattr(self, "params", {}) if isinstance(getattr(self, "params", {}), dict) else {}
+        steps = int(params.get("steps", 0) or 0)
+        details = {
+            "proposal_id": self.proposal_id,
+            "epoch": int(epoch + 1),
+            "batch": int(batch + 1),
+            "steps": steps,
+            "elapsed_seconds": round(float(elapsed), 2),
+        }
+        self._emit_event(
+            "model_training_heartbeat",
+            f"Model {self.proposal_id} segueix entrenant",
+            details,
+        )
+        if self.api is not None:
+            try:
+                self.api.update_proposal_status(
+                    self.proposal_id,
+                    "training",
+                    {
+                        "last_training_event_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+                        "last_training_heartbeat_elapsed_seconds": round(float(elapsed), 2),
+                    },
+                )
+            except Exception:
+                pass
 
     def on_epoch_end(self, epoch, logs=None):
         elapsed = time.time() - self.start_time
@@ -125,21 +195,9 @@ class TrainerFeedbackAndLimitCallback(KerasCallback):  # type: ignore[misc]
                 "metrics": metrics_payload,
             },
         )
-        
+
         if self.max_training_seconds > 0 and elapsed > self.max_training_seconds:
-            print(f"🛑 ATENCIÓ: Temps límit d'entrenament superat ({elapsed:.1f}s > {self.max_training_seconds}s). S'interromp l'entrenament.")
-            self._emit_event(
-                "model_training_stopped_by_time_limit",
-                f"Model {self.proposal_id} aturat per límit de temps",
-                {
-                    "proposal_id": self.proposal_id,
-                    "elapsed_seconds": round(float(elapsed), 2),
-                    "max_training_seconds": self.max_training_seconds,
-                },
-            )
-            model = getattr(self, "model", None)
-            if model is not None:
-                model.stop_training = True
+            self._stop_for_time_limit(elapsed, int(epoch), -1)
 
 
 class TrainingCheckpointCallback(KerasCallback):  # type: ignore[misc]
@@ -945,13 +1003,14 @@ class ModelTrainerEngine:
             batch_sz = model_def.get("training_config", {}).get("fit", {}).get("batch_size", 64)
             
             # Protecció contra èpoques excessives si cal fer testing ràpid
+            feedback_callback = TrainerFeedbackAndLimitCallback(
+                proposal_id,
+                active_max_training_seconds,
+                api_client=self.api,
+                run_id=run_id,
+            )
             callbacks = [
-                TrainerFeedbackAndLimitCallback(
-                    proposal_id,
-                    active_max_training_seconds,
-                    api_client=self.api,
-                    run_id=run_id,
-                ),
+                feedback_callback,
                 TrainingCheckpointCallback(
                     proposal_id=proposal_id,
                     run_id=run_id,
@@ -1053,6 +1112,12 @@ class ModelTrainerEngine:
                 callbacks=cast(Any, callbacks)
             )
             elapsed = time.time() - start_t
+
+            if bool(getattr(feedback_callback, "stopped_by_time_limit", False)):
+                raise TimeoutError(
+                    f"model {proposal_id} exceeded max training time "
+                    f"({active_max_training_seconds}s) during fit"
+                )
 
             total_epochs_trained = len(history.history['loss']) if 'loss' in history.history else 0
             completed_epoch = initial_epoch + total_epochs_trained
