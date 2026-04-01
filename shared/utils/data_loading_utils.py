@@ -7,6 +7,10 @@ import numpy as np
 import pandas as pd
 
 
+def _mb(arr: np.ndarray) -> float:
+    return round(float(arr.nbytes) / (1024.0 * 1024.0), 2)
+
+
 def load_all_raw_data_sources(
     data_paths_config: dict[str, Any],
     input_features_cfg: list[dict[str, Any]],
@@ -15,6 +19,7 @@ def load_all_raw_data_sources(
 ) -> dict[str, np.ndarray]:
     loaded_data: dict[str, np.ndarray] = {}
     keys_to_load: set[str] = set()
+    total_loaded_mb = 0.0
 
     for feat_conf in input_features_cfg:
         source_key = str(feat_conf.get("source_csv_key", "")).strip()
@@ -43,14 +48,18 @@ def load_all_raw_data_sources(
                     # If it's not float32, we do need to load it and convert it
                     arr = np.load(npy_path).astype(np.float32)
                 loaded_data[csv_key] = arr
-                print(f"✅ Cache binària (mmap) carregada: {file_name}.npy ({len(arr)} files)")
+                current_mb = _mb(arr)
+                total_loaded_mb += current_mb
+                print(f"✅ Cache binària (mmap) carregada: {file_name}.npy ({len(arr)} files, dtype={arr.dtype}, ~{current_mb} MB)")
                 continue
             
             # If not in cache or cache stale, load CSV
             print(f"📄 Carregant CSV: {file_name}...")
             arr = pd.read_csv(file_path, header=None, dtype=np.float32).values
             loaded_data[csv_key] = arr
-            print(f"✅ CSV carregat: {file_name} ({len(arr)} files)")
+            current_mb = _mb(arr)
+            total_loaded_mb += current_mb
+            print(f"✅ CSV carregat: {file_name} ({len(arr)} files, dtype={arr.dtype}, ~{current_mb} MB)")
             
             # Save to binary cache for next time
             try:
@@ -64,6 +73,7 @@ def load_all_raw_data_sources(
                 # Fallback in case of mixed types or other issues, though expected to be numeric
                 arr = pd.read_csv(file_path, header=None).values.astype(np.float32)
                 loaded_data[csv_key] = arr
+                total_loaded_mb += _mb(arr)
                 try:
                     np.save(npy_path, arr)
                 except Exception:
@@ -71,6 +81,7 @@ def load_all_raw_data_sources(
             except Exception:
                 loaded_data[csv_key] = np.array([], dtype=np.float32)
 
+    print(f"📦 Dades font carregades: {len(loaded_data)} arrays, ús aproximat ~{round(total_loaded_mb, 2)} MB")
     return loaded_data
 
 
@@ -119,5 +130,14 @@ def derive_additional_features_and_targets(
             data_dict[target_name] = source[:, slice(start, end)]
         else:
             data_dict[target_name] = source
+
+    summary = []
+    for key, value in data_dict.items():
+        if isinstance(value, np.ndarray) and value.size > 0:
+            summary.append(f"{key}: shape={value.shape}, dtype={value.dtype}, ~{_mb(value)} MB")
+    if summary:
+        print("🧾 Resum de tensores derivats:")
+        for line in summary[:20]:
+            print(f"   - {line}")
 
     return data_dict
