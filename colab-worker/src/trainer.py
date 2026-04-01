@@ -650,7 +650,10 @@ class ModelTrainerEngine:
         print(f"🩹 Intentant reparar o reemplaçar {proposal.get('proposal_id', '')} després de l'error: {error_message}")
 
         max_attempts = max(4, int(os.getenv("V2_TRAINING_REPAIR_MAX_ATTEMPTS", "5")))
-        retry_delay_seconds = max(1, int(os.getenv("V2_TRAINING_REPAIR_RETRY_DELAY_SECONDS", "5")))
+        retry_delay_seconds = max(
+            1,
+            int(os.getenv("V2_TRAINING_REPAIR_RETRY_DELAY_SECONDS", os.getenv("V2_LLM_MIN_INTERVAL_SECONDS", "30"))),
+        )
         for attempt in range(max_attempts):
             candidate_to_submit: dict[str, Any] | None = None
             mode = "repair"

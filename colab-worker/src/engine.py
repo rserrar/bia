@@ -657,7 +657,10 @@ class EvolutionWorkerEngine:
             "llm_metadata": llm_metadata,
         }
         max_attempts = max(3, int(os.getenv("V2_PHASE0_REPAIR_MAX_ATTEMPTS", "4")))
-        retry_delay_seconds = max(1, int(os.getenv("V2_PHASE0_REPAIR_RETRY_DELAY_SECONDS", "5")))
+        retry_delay_seconds = max(
+            1,
+            int(os.getenv("V2_PHASE0_REPAIR_RETRY_DELAY_SECONDS", os.getenv("V2_LLM_MIN_INTERVAL_SECONDS", "30"))),
+        )
         for attempt in range(max_attempts):
             mode = "repair" if attempt == 0 else "replacement"
             candidate_to_submit: dict[str, Any] | None = None
