@@ -327,6 +327,8 @@ class LlmProposalClient:
                     metadata = candidate.get("llm_metadata")
                     metadata_payload = metadata if isinstance(metadata, dict) else {}
                     metadata_payload["raw_response"] = data
+                    metadata_payload["response_text"] = content
+                    metadata_payload["response_chars"] = len(content)
                     candidate["llm_metadata"] = metadata_payload
                     self._attach_prompt_audit_metadata(candidate, context, prompt_text)
                     return candidate
@@ -444,6 +446,8 @@ class LlmProposalClient:
             metadata = candidate.get("llm_metadata")
             metadata_payload = metadata if isinstance(metadata, dict) else {}
             metadata_payload["raw_response"] = {"sdk_text": content}
+            metadata_payload["response_text"] = content
+            metadata_payload["response_chars"] = len(content)
             metadata_payload["gemini_transport"] = "google_genai_sdk"
             candidate["llm_metadata"] = metadata_payload
             self._attach_prompt_audit_metadata(candidate, context, prompt_text)
@@ -552,6 +556,7 @@ class LlmProposalClient:
     def _attach_prompt_audit_metadata(self, candidate: dict[str, Any], context: dict[str, Any], prompt_text: str) -> None:
         metadata_raw = candidate.get("llm_metadata")
         metadata_payload = metadata_raw if isinstance(metadata_raw, dict) else {}
+        prompt_hash = hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
         references = context.get("reference_models")
         ref_count = len([item for item in references if isinstance(item, dict)]) if isinstance(references, list) else 0
         latest_metrics_raw = context.get("latest_metrics")
@@ -569,7 +574,9 @@ class LlmProposalClient:
             "reference_policy_version": policy_version,
             "reference_models_selected": selected_refs,
             "latest_metrics": latest_metrics,
+            "prompt_sha256": prompt_hash,
             "prompt_chars": len(prompt_text),
+            "prompt_text": prompt_text,
             "prompt_preview": prompt_text[:1000],
             "prompt_template_file": self.config.prompt_template_file,
             "architecture_guide_file": self.config.architecture_guide_file,

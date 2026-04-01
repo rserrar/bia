@@ -212,6 +212,28 @@ function artifactAvailabilityLabel(array $resultSummary): string
     return $artifactType === '' ? 'missing' : 'available';
 }
 
+function llmResponseTextFromMetadata(array $llmMetadata): string
+{
+    $responseText = (string) ($llmMetadata['response_text'] ?? '');
+    if ($responseText !== '') {
+        return $responseText;
+    }
+    $rawResponse = is_array($llmMetadata['raw_response'] ?? null) ? $llmMetadata['raw_response'] : [];
+    if (is_string($rawResponse['sdk_text'] ?? null)) {
+        return (string) $rawResponse['sdk_text'];
+    }
+    $choices = is_array($rawResponse['choices'] ?? null) ? $rawResponse['choices'] : [];
+    $firstChoice = is_array($choices[0] ?? null) ? $choices[0] : [];
+    $message = is_array($firstChoice['message'] ?? null) ? $firstChoice['message'] : [];
+    if (is_string($message['content'] ?? null)) {
+        return (string) $message['content'];
+    }
+    if (is_string($firstChoice['text'] ?? null)) {
+        return (string) $firstChoice['text'];
+    }
+    return '';
+}
+
 function requestAlertBadges(array $request): array
 {
     $status = (string) ($request['status'] ?? '');
@@ -1031,7 +1053,7 @@ try {
                 <div class="field-card"><label class="kpi">Resume<br><select name="resume_enabled" id="resume_enabled"><option value="1">on</option><option value="0">off</option></select><span class="field-help">Permet reprendre entrenaments interromputs des de checkpoint</span></label></div>
                 <div class="field-card"><label class="kpi">Seed inicial<br><select name="bootstrap_seed_model_if_empty" id="bootstrap_seed_model_if_empty"><option value="0">off</option><option value="1">on</option></select><span class="field-help">Crea un model inicial si no n’hi ha cap disponible</span></label></div>
                 <div class="field-card"><label class="kpi">Auto phase0<br><select name="auto_process_proposals_phase0" id="auto_process_proposals_phase0"><option value="1">on</option><option value="0">off</option></select><span class="field-help">Processa automàticament les propostes inicials abans d’entrenar</span></label></div>
-                <div class="field-card"><label class="kpi">LLM interval<br><input type="number" name="llm_min_interval_seconds" id="llm_min_interval_seconds" value="20" min="0" style="width:70px;"><span class="field-help">Temps mínim entre crides al LLM per evitar saturació</span></label></div>
+                <div class="field-card"><label class="kpi">LLM interval<br><input type="number" name="llm_min_interval_seconds" id="llm_min_interval_seconds" value="30" min="0" style="width:70px;"><span class="field-help">Temps mínim entre crides al LLM per evitar saturació</span></label></div>
             </div>
             <div class="plan-summary" id="execution-plan-summary">
                 <div><strong id="plan-total-models">1 generació × 1 model = 1 model total</strong></div>
@@ -1457,6 +1479,7 @@ try {
                 <th>Artifact</th>
                 <th>Availability</th>
                 <th>Download</th>
+                <th>LLM prompt/response</th>
                 <th>Detail</th>
                 <th>Canviar status</th>
                 <th>Acció</th>
@@ -1474,6 +1497,13 @@ try {
                     $proposalKpis = is_array($proposal['training_kpis'] ?? null) ? $proposal['training_kpis'] : [];
                     $primaryArtifact = is_array($proposal['primary_artifact'] ?? null) ? $proposal['primary_artifact'] : [];
                     $resumeState = is_array($proposal['resume'] ?? null) ? $proposal['resume'] : [];
+                    $llmMetadata = is_array($proposal['llm_metadata'] ?? null) ? $proposal['llm_metadata'] : [];
+                    $promptAudit = is_array($llmMetadata['prompt_audit'] ?? null) ? $llmMetadata['prompt_audit'] : [];
+                    $promptText = (string) ($promptAudit['prompt_text'] ?? '');
+                    $promptChars = (int) ($promptAudit['prompt_chars'] ?? strlen($promptText));
+                    $promptHash = (string) ($promptAudit['prompt_sha256'] ?? '');
+                    $responseText = llmResponseTextFromMetadata($llmMetadata);
+                    $responseChars = (int) ($llmMetadata['response_chars'] ?? strlen($responseText));
                 ?>
                 <tr>
                     <td><?php echo $proposalIdEscaped; ?></td>
@@ -1490,6 +1520,28 @@ try {
                     <td>
                         <?php if ((string) ($primaryArtifact['artifact_id'] ?? '') !== ''): ?>
                             <a href="./monitor.php?download_artifact_id=<?php echo rawurlencode((string) ($primaryArtifact['artifact_id'] ?? '')); ?>" target="_blank" rel="noreferrer">Descarregar</a>
+                        <?php endif; ?>
+                    </td>
+                    <td>
+                        <?php if ($promptText !== '' || $responseText !== ''): ?>
+                            <div class="kpi">provider: <span class="mono"><?php echo htmlspecialchars((string) ($llmMetadata['provider'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span></div>
+                            <div class="kpi">gen/candidate: <span class="mono"><?php echo htmlspecialchars((string) ($llmMetadata['from_generation'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>/<?php echo htmlspecialchars((string) ($llmMetadata['candidate_index'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></span></div>
+                            <div class="kpi">prompt chars: <span class="mono"><?php echo htmlspecialchars((string) $promptChars, ENT_QUOTES, 'UTF-8'); ?></span></div>
+                            <div class="kpi">response chars: <span class="mono"><?php echo htmlspecialchars((string) $responseChars, ENT_QUOTES, 'UTF-8'); ?></span></div>
+                            <?php if ($promptHash !== ''): ?><div class="kpi">prompt sha256: <span class="mono"><?php echo htmlspecialchars($promptHash, ENT_QUOTES, 'UTF-8'); ?></span></div><?php endif; ?>
+                            <details>
+                                <summary>Veure prompt + resposta</summary>
+                                <?php if ($promptText !== ''): ?>
+                                <div class="kpi" style="margin-top:6px;">Prompt</div>
+                                <pre style="font-size:11px; margin:0; background:#1e293b; padding:4px; overflow:auto; max-width:520px; max-height:220px;"><?php echo htmlspecialchars($promptText, ENT_QUOTES, 'UTF-8'); ?></pre>
+                                <?php endif; ?>
+                                <?php if ($responseText !== ''): ?>
+                                <div class="kpi" style="margin-top:6px;">Resposta</div>
+                                <pre style="font-size:11px; margin:0; background:#1e293b; padding:4px; overflow:auto; max-width:520px; max-height:220px;"><?php echo htmlspecialchars($responseText, ENT_QUOTES, 'UTF-8'); ?></pre>
+                                <?php endif; ?>
+                            </details>
+                        <?php else: ?>
+                            <span class="kpi">sense traça LLM</span>
                         <?php endif; ?>
                     </td>
                     <td><a href="<?php echo $proposalDetailPath; ?>" target="_blank" rel="noreferrer">Veure proposta</a></td>
