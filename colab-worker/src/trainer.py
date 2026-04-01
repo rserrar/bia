@@ -34,9 +34,9 @@ except ImportError:
 from src.api_client import ApiClient
 
 try:
-    from .llm_client import LlmConfig, LlmProposalClient
+    from .llm_client import LlmConfig, LlmGenerationError, LlmProposalClient
 except ImportError:
-    from llm_client import LlmConfig, LlmProposalClient
+    from llm_client import LlmConfig, LlmGenerationError, LlmProposalClient
 
 
 def _resolve_repo_path(path_str: str, repo_root: Path) -> Path:
@@ -360,6 +360,12 @@ class ModelTrainerEngine:
     def _mark_llm_call_started(self) -> None:
         self._llm_last_call_ts = time.time()
 
+    def _llm_error_details(self, error: Exception) -> dict[str, Any]:
+        if isinstance(error, LlmGenerationError):
+            return error.details if isinstance(error.details, dict) else {}
+        details = getattr(error, "details", None)
+        return details if isinstance(details, dict) else {}
+
     def _load_legacy_training_utils(self) -> tuple[Any, Any, Any, Any, Any]:
         if self._legacy_utils_cache is not None:
             return cast(tuple[Any, Any, Any, Any, Any], self._legacy_utils_cache)
@@ -665,7 +671,7 @@ class ModelTrainerEngine:
                     print(f"🔧 Resposta de repair rebuda per {proposal.get('proposal_id', '')} (intent {attempt + 1})")
                 except Exception as repair_error:
                     print(f"❌ Repair LLM fallida per {proposal.get('proposal_id', '')} (intent {attempt + 1}): {repair_error}")
-                    self.api.add_event(run_id, "model_repair_failed", f"Repair LLM fallida per {proposal.get('proposal_id', '')}", {"error": str(repair_error), "attempt": attempt + 1})
+                    self.api.add_event(run_id, "model_repair_failed", f"Repair LLM fallida per {proposal.get('proposal_id', '')}", {"error": str(repair_error), "attempt": attempt + 1, "llm_error_details": self._llm_error_details(repair_error)})
             else:
                 mode = "replacement"
                 try:
@@ -675,7 +681,7 @@ class ModelTrainerEngine:
                     print(f"🆕 Reemplaç generat per {proposal.get('proposal_id', '')} (intent {attempt + 1})")
                 except Exception as replacement_error:
                     print(f"❌ Generació reemplaçament fallida per {proposal.get('proposal_id', '')} (intent {attempt + 1}): {replacement_error}")
-                    self.api.add_event(run_id, "model_repair_failed", f"Generació reemplaçament fallida per {proposal.get('proposal_id', '')}", {"error": str(replacement_error), "attempt": attempt + 1})
+                    self.api.add_event(run_id, "model_repair_failed", f"Generació reemplaçament fallida per {proposal.get('proposal_id', '')}", {"error": str(replacement_error), "attempt": attempt + 1, "llm_error_details": self._llm_error_details(replacement_error)})
 
             if not isinstance(candidate_to_submit, dict):
                 if attempt + 1 < max_attempts:

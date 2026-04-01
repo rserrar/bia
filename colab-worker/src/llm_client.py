@@ -42,6 +42,12 @@ class LlmRateLimitError(RuntimeError):
     pass
 
 
+class LlmGenerationError(RuntimeError):
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.details = details if isinstance(details, dict) else {}
+
+
 class LlmProposalClient:
     def __init__(self, config: LlmConfig) -> None:
         self.config = config
@@ -325,15 +331,42 @@ class LlmProposalClient:
                     self._attach_prompt_audit_metadata(candidate, context, prompt_text)
                     return candidate
                 except (json.JSONDecodeError, RuntimeError) as error:
+                    choices = data.get("choices") if isinstance(data, dict) else None
+                    first_choice = choices[0] if isinstance(choices, list) and len(choices) > 0 and isinstance(choices[0], dict) else {}
+                    finish_reason = str(first_choice.get("finish_reason", "") or "")
+                    usage = data.get("usage") if isinstance(data, dict) and isinstance(data.get("usage"), dict) else {}
+                    completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+                    total_tokens = int(usage.get("total_tokens", 0) or 0)
+                    max_tokens_used = max_tokens_override if isinstance(max_tokens_override, int) and max_tokens_override > 0 else int(self.config.max_tokens)
+                    diagnostic_error = (
+                        f"{error} | finish_reason={finish_reason or 'n/a'}"
+                        f" | content_chars={len(content)}"
+                        f" | completion_tokens={completion_tokens}"
+                        f" | total_tokens={total_tokens}"
+                        f" | max_tokens={max_tokens_used}"
+                    )
+                    diagnostic_details = {
+                        "provider": provider_label,
+                        "endpoint": attempt_endpoint,
+                        "generation_attempt": generation_attempt + 1,
+                        "finish_reason": finish_reason,
+                        "content_chars": len(content),
+                        "completion_tokens": completion_tokens,
+                        "total_tokens": total_tokens,
+                        "max_tokens": max_tokens_used,
+                        "prompt_text": prompt_text,
+                        "response_text": content,
+                        "raw_response": data,
+                    }
                     self._log_openai_attempt(
                         prompt_text=prompt_text,
                         response_data=data,
-                        error_message=f"parse_or_validation_error: {error}",
+                        error_message=f"parse_or_validation_error: {diagnostic_error}",
                         context=context,
                         endpoint=attempt_endpoint,
                         attempt=generation_attempt + 1,
                     )
-                    last_error = error
+                    last_error = LlmGenerationError(diagnostic_error, diagnostic_details)
                     if generation_attempt < 2:
                         time.sleep(2 + generation_attempt)
                         break
@@ -345,11 +378,21 @@ class LlmProposalClient:
             first_choice = choices[0] if isinstance(choices, list) and len(choices) > 0 and isinstance(choices[0], dict) else {}
             finish_reason = first_choice.get("finish_reason", None) if isinstance(first_choice, dict) else None
             raw_preview = json.dumps(data, ensure_ascii=False)[:1200] if isinstance(data, dict) else str(data)[:1200]
-            raise RuntimeError(
+            raise LlmGenerationError(
                 f"OpenAI response content is empty (endpoint={attempt_endpoint}, "
                 f"finish_reason={finish_reason}, raw_preview={raw_preview})"
+                ,
+                {
+                    "provider": provider_label,
+                    "endpoint": attempt_endpoint,
+                    "finish_reason": finish_reason,
+                    "prompt_text": prompt_text,
+                    "raw_response": data,
+                },
             )
         if last_error is not None:
+            if isinstance(last_error, LlmGenerationError):
+                raise last_error
             raise RuntimeError(f"OpenAI generation failed after retries: {last_error}") from last_error
         raise RuntimeError("OpenAI generation failed without candidate after retries")
 
@@ -400,7 +443,7 @@ class LlmProposalClient:
             candidate = self._validate_candidate(candidate)
             metadata = candidate.get("llm_metadata")
             metadata_payload = metadata if isinstance(metadata, dict) else {}
-            metadata_payload["raw_response"] = {"sdk_text_preview": content[:4000]}
+            metadata_payload["raw_response"] = {"sdk_text": content}
             metadata_payload["gemini_transport"] = "google_genai_sdk"
             candidate["llm_metadata"] = metadata_payload
             self._attach_prompt_audit_metadata(candidate, context, prompt_text)

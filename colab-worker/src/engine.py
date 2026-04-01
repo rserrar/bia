@@ -15,13 +15,13 @@ try:
     from .checkpoint_store import CheckpointStore
     from .config import WorkerConfig
     from .legacy_model_compat import build_legacy_model_once
-    from .llm_client import LlmConfig, LlmProposalClient, LlmRateLimitError
+    from .llm_client import LlmConfig, LlmGenerationError, LlmProposalClient, LlmRateLimitError
 except ImportError:
     from api_client import ApiClient
     from checkpoint_store import CheckpointStore
     from config import WorkerConfig
     from legacy_model_compat import build_legacy_model_once
-    from llm_client import LlmConfig, LlmProposalClient, LlmRateLimitError
+    from llm_client import LlmConfig, LlmGenerationError, LlmProposalClient, LlmRateLimitError
 
 
 @dataclass
@@ -76,6 +76,12 @@ class EvolutionWorkerEngine:
 
     def _mark_llm_call_started(self) -> None:
         self.last_llm_call_ts = time.time()
+
+    def _llm_error_details(self, error: Exception) -> dict[str, Any]:
+        if isinstance(error, LlmGenerationError):
+            return error.details if isinstance(error.details, dict) else {}
+        details = getattr(error, "details", None)
+        return details if isinstance(details, dict) else {}
 
     def _load_state(self) -> WorkerState:
         data = self.checkpoints.load()
@@ -310,6 +316,7 @@ class EvolutionWorkerEngine:
                 raise
             except Exception as error:
                 print(f"❌ Error generant proposta a generació {generation} candidat {candidate_index + 1}: {error}")
+                diagnostic_details = self._llm_error_details(error)
                 self.api.add_event(
                     run_id,
                     "llm_proposal_error",
@@ -318,6 +325,7 @@ class EvolutionWorkerEngine:
                         "error": str(error),
                         "candidate_index": candidate_index + 1,
                         "candidates_expected": proposals_per_generation,
+                        "llm_error_details": diagnostic_details,
                     },
                 )
 
@@ -675,7 +683,7 @@ class EvolutionWorkerEngine:
                     print(f"🆕 Reemplaç phase0 generat per {proposal.get('proposal_id', '')} (intent {attempt + 1})")
             except Exception as error:
                 print(f"❌ Intent {attempt + 1} de phase0 repair/replacement fallit per {proposal.get('proposal_id', '')}: {error}")
-                self.api.add_event(run_id, "phase0_repair_failed", f"Intent {attempt + 1} de repair/replacement fallit", {"proposal_id": proposal.get("proposal_id"), "attempt": attempt + 1, "mode": mode, "error": str(error)})
+                self.api.add_event(run_id, "phase0_repair_failed", f"Intent {attempt + 1} de repair/replacement fallit", {"proposal_id": proposal.get("proposal_id"), "attempt": attempt + 1, "mode": mode, "error": str(error), "llm_error_details": self._llm_error_details(error)})
                 if attempt + 1 < max_attempts:
                     time.sleep(retry_delay_seconds)
                 continue
