@@ -234,20 +234,26 @@ def main() -> int:
     proposals_payload, _ = _request_json("GET", api_base_url, "/model-proposals?limit=200", api_token)
     proposals = [p for p in proposals_payload.get("model_proposals", []) if isinstance(p, dict) and p.get("source_run_id") == run_id]
     validated = [p for p in proposals if p.get("status") == "validated_phase0"]
+    phase0_processed_statuses = {"validated_phase0", "accepted", "training", "trained", "rejected"}
+    phase0_processed = [p for p in proposals if p.get("status") in phase0_processed_statuses]
+    queued_phase0 = [p for p in proposals if p.get("status") == "queued_phase0"]
+    run_status = summary.get("run", {}).get("status")
 
     output = {
-        "ok": len(proposals) >= expected_models_total and len(validated) >= expected_models_total,
+        "ok": len(proposals) >= expected_models_total and len(phase0_processed) >= expected_models_total and len(queued_phase0) == 0,
         "run_id": run_id,
         "generations": generations,
         "models_per_generation": models_per_generation,
         "expected_models_total": expected_models_total,
         "proposals_created": len(proposals),
         "proposals_validated_phase0": len(validated),
+        "proposals_phase0_processed": len(phase0_processed),
+        "proposals_queued_phase0": len(queued_phase0),
         "llm_created_events": len(llm_created_events),
         "llm_error_events": len(llm_error_events),
         "llm_error_samples": [e.get("details", {}) for e in llm_error_events[-3:]],
         "events_endpoint_available": events_endpoint_available,
-        "run_status": summary.get("run", {}).get("status"),
+        "run_status": run_status,
         "latest_event_type": summary.get("latest_event", {}).get("event_type"),
         "latest_event_label": summary.get("latest_event", {}).get("label"),
         "provider": provider,
