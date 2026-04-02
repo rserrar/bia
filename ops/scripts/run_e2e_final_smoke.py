@@ -5,7 +5,6 @@ import os
 import subprocess
 import sys
 import time
-import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -241,86 +240,65 @@ def main() -> int:
     trial_env["V2_LLM_TRIAL_GENERATIONS"] = str(generations)
     models_per_generation = int(os.getenv("V2_LLM_NUM_NEW_MODELS", os.getenv("V2_MODELS_PER_GENERATION", "1")))
 
-    print("[e2e] start trainer supervisor-in-line")
-    trainer_env = os.environ.copy()
-    trainer = subprocess.Popen(
-        [sys.executable, str(repo / "colab-worker" / "run_trainer.py")],
-        cwd=str(repo),
-        env=trainer_env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
-    trainer_log_thread = threading.Thread(target=_stream_process_output, args=(trainer, "[trainer] "), daemon=True)
-    trainer_log_thread.start()
-
-    print(f"[e2e] start LLM trial generations={generations}")
+    print(f"[e2e] start runtime trial generations={generations}")
     _emit_progress({
         "stage": "starting_trial",
-        "stage_label": "Inicialitzant worker i trainer per generar i entrenar en paral·lel",
+        "stage_label": "Inicialitzant runtime amb controller, trainer i watchdog",
         "generations_total": generations,
         "generations_completed": 0,
         "models_generated": 0,
         "models_trained": 0,
         "models_per_generation": models_per_generation,
     })
-    try:
-        trial_rc, trial_stdout = _run_and_stream(
-            [sys.executable, str(repo / "ops" / "scripts" / "run_llm_generation_trial.py")],
-            cwd=repo,
-            env=trial_env,
-        )
-        trial_json = _extract_last_json_block(trial_stdout)
-        run_id = str(trial_json.get("run_id", "")).strip()
-        if run_id == "":
-            if bool(trial_json.get("stop_worker_loop")):
-                _emit_progress({
-                    "stage": "llm_rate_limited",
-                    "stage_label": "Rate limit de l'LLM; aturant worker de Colab",
-                    "stop_worker_loop": True,
-                    "fatal_error": "llm_rate_limited",
-                    "error": trial_json.get("error", "llm_rate_limited"),
-                })
-            raise RuntimeError("run_id missing in LLM trial output")
-        trial_expected_models = int(trial_json.get("expected_models_total", generations * models_per_generation) or (generations * models_per_generation))
-        trial_created_models = int(trial_json.get("proposals_created", 0) or 0)
-        partial_generation = (trial_rc != 0 or not trial_json.get("ok")) and trial_created_models > 0
-        effective_expected_models = trial_created_models if partial_generation else trial_expected_models
-        if (trial_rc != 0 or not trial_json.get("ok")) and not partial_generation:
-            raise RuntimeError(f"LLM trial failed: rc={trial_rc}, result={trial_json}")
+    trial_rc, trial_stdout = _run_and_stream(
+        [sys.executable, str(repo / "ops" / "scripts" / "run_llm_generation_trial.py")],
+        cwd=repo,
+        env=trial_env,
+    )
+    trial_json = _extract_last_json_block(trial_stdout)
+    run_id = str(trial_json.get("run_id", "")).strip()
+    if run_id == "":
+        if bool(trial_json.get("stop_worker_loop")):
+            _emit_progress({
+                "stage": "llm_rate_limited",
+                "stage_label": "Rate limit de l'LLM; aturant worker de Colab",
+                "stop_worker_loop": True,
+                "fatal_error": "llm_rate_limited",
+                "error": trial_json.get("error", "llm_rate_limited"),
+            })
+        raise RuntimeError("run_id missing in LLM trial output")
+    trial_expected_models = int(trial_json.get("expected_models_total", generations * models_per_generation) or (generations * models_per_generation))
+    trial_created_models = int(trial_json.get("proposals_created", 0) or 0)
+    partial_generation = (trial_rc != 0 or not trial_json.get("ok")) and trial_created_models > 0
+    effective_expected_models = trial_created_models if partial_generation else trial_expected_models
+    if (trial_rc != 0 or not trial_json.get("ok")) and not partial_generation:
+        raise RuntimeError(f"LLM trial failed: rc={trial_rc}, result={trial_json}")
 
-        _emit_progress({
-            "stage": "generation_phase_completed",
-            "stage_label": "Generacions completades; esperant tancament de training en paral·lel" if not partial_generation else "Generació parcial; continuant amb els models disponibles",
-            "run_id": run_id,
-            "current_run_id": run_id,
-            "run_ids": [run_id],
-            "generations_total": generations,
-            "generations_completed": int(trial_json.get("generations", generations) or generations),
-            "models_generated": trial_created_models,
-            "models_trained": 0,
-            "latest_event_type": trial_json.get("latest_event_type"),
-            "latest_event_label": trial_json.get("latest_event_label"),
-            "partial_generation": partial_generation,
-            "effective_expected_models_total": effective_expected_models,
-            "llm_error_events": int(trial_json.get("llm_error_events", 0) or 0),
-        })
+    _emit_progress({
+        "stage": "generation_phase_completed",
+        "stage_label": "Generacions completades; esperant tancament de training en paral·lel" if not partial_generation else "Generació parcial; continuant amb els models disponibles",
+        "run_id": run_id,
+        "current_run_id": run_id,
+        "run_ids": [run_id],
+        "generations_total": generations,
+        "generations_completed": int(trial_json.get("generations", generations) or generations),
+        "models_generated": trial_created_models,
+        "models_trained": 0,
+        "latest_event_type": trial_json.get("latest_event_type"),
+        "latest_event_label": trial_json.get("latest_event_label"),
+        "partial_generation": partial_generation,
+        "effective_expected_models_total": effective_expected_models,
+        "llm_error_events": int(trial_json.get("llm_error_events", 0) or 0),
+    })
 
-        result = _poll_until_trained(
-            api_base_url,
-            api_token,
-            run_id,
-            timeout_seconds=train_timeout_seconds,
-            expected_models_total=effective_expected_models,
-            on_progress=_emit_progress,
-        )
-    finally:
-        trainer.terminate()
-        try:
-            trainer.wait(timeout=10)
-        except Exception:
-            trainer.kill()
+    result = _poll_until_trained(
+        api_base_url,
+        api_token,
+        run_id,
+        timeout_seconds=train_timeout_seconds,
+        expected_models_total=effective_expected_models,
+        on_progress=_emit_progress,
+    )
 
     trained_proposal = result.get("trained_proposal", {})
     summary = result.get("summary", {})
