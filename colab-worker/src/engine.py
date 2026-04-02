@@ -1006,10 +1006,13 @@ class EvolutionWorkerEngine:
         remaining_needed = max(0, target_models_total - trained_count)
         if remaining_needed <= 0:
             return 0
+        pending_capacity_needed = max(0, target_models_total - trained_count - active_count)
+        if pending_capacity_needed <= 0:
+            return 0
         buffer_gap = max(0, buffer_target - active_count)
         if buffer_gap <= 0:
             return 0
-        creation_budget = min(buffer_gap, remaining_needed, 2)
+        creation_budget = min(buffer_gap, pending_capacity_needed, 2)
         created_total = 0
         for _ in range(creation_budget):
             proposal_sequence = scheduled_count + created_total + 1
