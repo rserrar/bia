@@ -4,6 +4,9 @@ import os
 import time
 import json
 import copy
+import subprocess
+import sys
+import signal
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -33,6 +36,109 @@ class WorkerState:
     total_llm_tokens: int = 0
 
 
+class TrainerSupervisor:
+    """Gestiona el procés del Trainer en un subprocess separat."""
+    def __init__(self, api_client: ApiClient, repo_root: Path):
+        self.api = api_client
+        self.repo_root = repo_root
+        self.process: subprocess.Popen | None = None
+        self.last_check_ts = time.time()
+        self.trainer_id: str | None = None
+        self.stuck_timeout_seconds = int(os.getenv("V2_TRAINER_STUCK_TIMEOUT", "600")) # 10 minuts per defecte
+
+    def start(self):
+        self.stop() # Assegurar que no n'hi ha cap altre
+        print("🚀 Supervisor: Llançant nou procés del Trainer...")
+        
+        cmd = [sys.executable, str(self.repo_root / "colab-worker" / "run_trainer.py")]
+        
+        # Passem variables d'entorn necessàries
+        env = os.environ.copy()
+        # Podem forçar que el trainer hereti la configuració
+        
+        self.process = subprocess.Popen(
+            cmd,
+            cwd=str(self.repo_root),
+            env=env,
+            stdout=None, # El deixem que escrigui a la consola de Colab directament
+            stderr=None
+        )
+        self.last_check_ts = time.time()
+        print(f"✅ Supervisor: Trainer iniciat amb PID {self.process.pid}")
+
+    def stop(self):
+        if self.process and self.process.poll() is None:
+            print(f"🛑 Supervisor: Aturant procés del Trainer (PID {self.process.pid})...")
+            try:
+                # Intentem tancament amable
+                if os.name == 'nt': # Windows
+                    self.process.terminate()
+                else:
+                    os.kill(self.process.pid, signal.SIGTERM)
+                
+                self.process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                print("⚠️ Supervisor: El procés no s'atura, forçant kill...")
+                self.process.kill()
+            except Exception as e:
+                print(f"⚠️ Supervisor: Error al tancar el procés: {e}")
+        
+        self.process = None
+
+    def ensure_alive(self):
+        """Comprova si el procés està viu i si està 'encallat'."""
+        if not self.process or self.process.poll() is not None:
+            print("⚠️ Supervisor: El procés del Trainer ha mort o no ha començat. Reiniciant...")
+            self.start()
+            return
+
+        # Comprovació de si està encallat (cada X minuts)
+        now = time.time()
+        if now - self.last_check_ts > 60: # Comprovem cada minut
+            self.last_check_ts = now
+            if self._is_trainer_stuck():
+                print(f"🔥 Supervisor: Detectat Trainer encallat! Reiniciant procés...")
+                self.api.add_event(
+                    os.getenv("V2_RUN_ID", "unknown"), 
+                    "trainer_stuck_detected", 
+                    "El supervisor ha detectat que el trainer està encallat i el reiniciarà"
+                )
+                self.start()
+
+    def _is_trainer_stuck(self) -> bool:
+        """Determina si el trainer està encallat basant-se en l'activitat de l'API."""
+        try:
+            # Busquem l'últim event de la run per saber si hi ha moviment
+            run_id = os.getenv("V2_RUN_ID")
+            if not run_id:
+                return False
+                
+            # Si el procés ha acabat, no està encallat (està mort)
+            if self.process and self.process.poll() is not None:
+                return False
+                
+            # Comprovem l'últim event de la run
+            events = self.api._request("GET", f"runs/{run_id}/events", params={"limit": 1})
+            if isinstance(events, list) and len(events) > 0:
+                last_event = events[0]
+                created_at = last_event.get("created_at")
+                if created_at:
+                    # Parseig simple de data ISO
+                    import datetime
+                    # Treiem la Z o el +00:00 si cal
+                    clean_ts = created_at.split('.')[0].replace('Z', '').replace(' ', 'T')
+                    last_dt = datetime.datetime.fromisoformat(clean_ts)
+                    diff = (datetime.datetime.utcnow() - last_dt).total_seconds()
+                    
+                    if diff > self.stuck_timeout_seconds:
+                        print(f"🕵️ Supervisor: L'últim event ({last_event.get('event_type')}) fa {diff:.1f}s. El límit és {self.stuck_timeout_seconds}s.")
+                        return True
+            return False
+        except Exception as e:
+            print(f"⚠️ Supervisor: Error comprovisionant si està encallat: {e}")
+            return False
+
+
 class EvolutionWorkerEngine:
     def __init__(self, config: WorkerConfig, api_client: ApiClient, checkpoint_store: CheckpointStore) -> None:
         self.config = config
@@ -40,6 +146,8 @@ class EvolutionWorkerEngine:
         self.checkpoints = checkpoint_store
         self.state = self._load_state()
         self.last_llm_call_ts = 0.0
+        self.repo_root = Path(__file__).resolve().parents[2]
+        self.supervisor = TrainerSupervisor(self.api, self.repo_root)
         self.llm = LlmProposalClient(
             LlmConfig(
                 enabled=self.config.llm_enabled,
@@ -124,6 +232,84 @@ class EvolutionWorkerEngine:
         run = self.api.heartbeat(self.state.run_id)
         self.state.status = run["status"]
         self._save_state()
+        # Aprofitem el heartbeat per processar rebuigs d'entrenament
+        self._process_training_rejections()
+
+    def _process_training_rejections(self) -> None:
+        run_id = self.state.run_id
+        if not run_id:
+            return
+        try:
+            proposals = self.api.list_model_proposals(limit=300)
+        except Exception:
+            return
+        for proposal in proposals:
+            if str(proposal.get("source_run_id", "")) != run_id:
+                continue
+            if str(proposal.get("status", "")) != "rejected":
+                continue
+            llm_metadata = proposal.get("llm_metadata") if isinstance(proposal.get("llm_metadata"), dict) else {}
+            # Si té error d'entrenament i encara no s'ha intentat reparar
+            if "training_error" in llm_metadata and "repair_replacement_proposal_id" not in llm_metadata:
+                # Evitem re-intentar si ja hem arribat al límit de profunditat
+                if int(llm_metadata.get("repair_depth", 0)) >= 1:
+                    continue
+                try:
+                    self._attempt_repair_rejected_training_proposal(proposal)
+                except Exception as e:
+                    print(f"⚠️ Error intentant reparar fallada d'entrenament a {proposal.get('proposal_id')}: {e}")
+
+    def _attempt_repair_rejected_training_proposal(self, proposal: dict[str, Any]) -> None:
+        run_id = self.state.run_id
+        if not run_id:
+            return
+        llm_metadata = proposal.get("llm_metadata") if isinstance(proposal.get("llm_metadata"), dict) else {}
+        error_message = str(llm_metadata.get("training_error", "Unknown training error"))
+        
+        print(f"🛠️ Reparant fallada d'entrenament per {proposal.get('proposal_id')}: {error_message[:100]}...")
+        
+        # Lògica de context per a l'LLM
+        references, selection_trace = self._collect_reference_models_for_prompt(run_id)
+        recent_generated_models = self._collect_recent_generated_models(run_id)
+        context = {
+            "generation": int(llm_metadata.get("from_generation", 0) or 0),
+            "run_id": run_id,
+            "code_version": self.config.code_version,
+            "reference_models": references,
+            "reference_selection_trace": selection_trace,
+            "recent_generated_models": recent_generated_models,
+            "latest_metrics": {},
+        }
+        original_candidate = {
+            "base_model_id": str(proposal.get("base_model_id", "")).strip() or "repair_base_model",
+            "proposal": proposal.get("proposal") if isinstance(proposal.get("proposal"), dict) else {},
+            "llm_metadata": llm_metadata,
+        }
+
+        # Intentem reparar o reemplaçar (mateixa lògica que phase0 però per training)
+        self._respect_llm_min_interval()
+        self._mark_llm_call_started()
+        try:
+            # Primer intent de reparació directa
+            candidate_to_submit = self.llm._repair_candidate_after_validation_error(original_candidate, error_message, context)
+            if candidate_to_submit:
+                self._submit_training_repaired_candidate(run_id, proposal, candidate_to_submit, error_message, "repair", 1)
+            else:
+                # Si falla la reparació, provem un reemplaçament total
+                self._respect_llm_min_interval()
+                self._mark_llm_call_started()
+                candidate_to_submit = self.llm.generate_candidate(context)
+                if candidate_to_submit:
+                    self._submit_training_repaired_candidate(run_id, proposal, candidate_to_submit, error_message, "replacement", 2)
+        except Exception as e:
+            print(f"❌ Fallida crítica en la reparació de training per {proposal.get('proposal_id')}: {e}")
+
+    def _submit_training_repaired_candidate(self, run_id: str, original_proposal: dict[str, Any], candidate: dict[str, Any], error_message: str, mode: str, attempt: int) -> None:
+        # Reutilitzem la lògica de submissió de phase0 adaptada
+        repair_depth = int(original_proposal.get("llm_metadata", {}).get("repair_depth", 0))
+        created_id = self._submit_phase0_repaired_candidate(run_id, original_proposal, candidate, error_message, repair_depth, mode, attempt)
+        if created_id:
+            print(f"✅ Reemplaç d'entrenament enviat: {created_id} (per {original_proposal.get('proposal_id')})")
 
     def _run_generation_step(self, generation: int) -> None:
         run_id = self.state.run_id
@@ -152,56 +338,89 @@ class EvolutionWorkerEngine:
         self.state.stage = "generation_completed"
         self._save_state()
 
-    def _generation_proposal_counts(self, run_id: str, generation: int) -> dict[str, int]:
-        active_statuses = {"draft", "queued_phase0", "validated_phase0", "accepted", "training"}
-        counts = {"total": 0, "active": 0, "training": 0, "trained": 0, "rejected": 0}
-        try:
-            proposals = self.api.list_model_proposals(limit=500)
-        except Exception:
-            return counts
-        for proposal in proposals:
-            if str(proposal.get("source_run_id", "")) != run_id:
-                continue
-            llm_metadata = proposal.get("llm_metadata") if isinstance(proposal.get("llm_metadata"), dict) else {}
-            proposal_generation = int(llm_metadata.get("from_generation", -1) or -1)
-            if proposal_generation != generation:
-                continue
-            counts["total"] += 1
-            status = str(proposal.get("status", ""))
-            if status in active_statuses:
-                counts["active"] += 1
-            if status == "training":
-                counts["training"] += 1
-            elif status == "trained":
-                counts["trained"] += 1
-            elif status == "rejected":
-                counts["rejected"] += 1
-        return counts
+    def _collect_reference_models_for_prompt(self, run_id: str) -> tuple[list[dict[str, object]], dict[str, Any]]:
+        max_refs = max(0, int(self.config.llm_num_reference_models))
+        if max_refs <= 0:
+            return [], {"policy_version": "selection_policy_v1", "selected": [], "rejected": []}
 
-    def _wait_for_generation_to_drain(self, run_id: str, generation: int, prefetch_generation: int | None = None) -> int | None:
-        timeout_seconds = max(60, int(os.getenv("V2_WAIT_FOR_GENERATION_DRAIN_SECONDS", "86400")))
-        poll_seconds = max(5, int(os.getenv("V2_WAIT_FOR_GENERATION_DRAIN_POLL_SECONDS", "10")))
-        started = time.time()
-        prefetched_generation: int | None = None
-        print(f"⏳ Esperant que la generació {generation} es buidi abans de continuar...")
-        self.api.add_event(run_id, "generation_drain_wait_started", f"Esperant que la generació {generation} es buidi", {"generation": generation, "prefetch_generation": prefetch_generation})
-        while True:
-            self._send_heartbeat()
-            self._process_queued_proposals_phase0_if_enabled()
-            counts = self._generation_proposal_counts(run_id, generation)
-            if counts["total"] == 0 or counts["active"] == 0:
-                print(f"✅ Generació {generation} resolta: total={counts['total']} trained={counts['trained']} rejected={counts['rejected']}")
-                self.api.add_event(run_id, "generation_drain_wait_completed", f"Generació {generation} buidada", {"generation": generation, **counts})
-                return prefetched_generation
-            if prefetch_generation is not None and prefetched_generation is None and counts["training"] == 1 and counts["active"] == 1:
-                print(f"⚡ Prefetch de la generació {prefetch_generation} mentre es tanca la {generation}")
-                self.api.add_event(run_id, "generation_prefetch_started", f"Prefetch generació {prefetch_generation} mentre es tanca la {generation}", {"current_generation": generation, "prefetch_generation": prefetch_generation, **counts})
-                self._run_generation_step(prefetch_generation)
-                prefetched_generation = prefetch_generation
-            if time.time() - started > timeout_seconds:
-                self.api.add_event(run_id, "generation_drain_wait_timeout", f"Timeout esperant generació {generation}", {"generation": generation, **counts})
-                raise TimeoutError(f"generation {generation} did not drain for run {run_id}: {counts}")
-            time.sleep(poll_seconds)
+        references: list[dict[str, object]] = []
+        selected_trace: list[dict[str, Any]] = []
+        rejected_trace: list[dict[str, Any]] = []
+        policy = load_policy_config_from_env()
+        try:
+            proposals = self.api.list_model_proposals(limit=300)
+            ranked: list[tuple[float, dict[str, object], dict[str, Any]]] = []
+            for proposal in proposals:
+                payload = proposal.get("proposal")
+                if not isinstance(payload, dict):
+                    continue
+                model_definition = payload.get("model_definition")
+                if not isinstance(model_definition, dict):
+                    continue
+                decision = evaluate_reference_candidate(proposal, config=policy)
+                if not bool(decision.get("eligible")):
+                    rejected_trace.append(
+                        {
+                            "proposal_id": str(proposal.get("proposal_id", "")),
+                            "status": str(proposal.get("status", "")),
+                            "selection_reason": str(decision.get("selection_reason", "")),
+                            "constraints_failed": decision.get("constraints_failed", []),
+                            "score": decision.get("score"),
+                        }
+                    )
+                    continue
+                score = float(decision.get("score", 0.0))
+                reference: dict[str, object] = dict(model_definition)
+                reference["model_id"] = str(model_definition.get("model_id", proposal.get("proposal_id", "unknown_model")))
+                reference["reference_status"] = str(proposal.get("status", ""))
+                reference["reference_source_run_id"] = str(proposal.get("source_run_id", ""))
+                reference["selection_score"] = score
+                reference["selection_reason"] = str(decision.get("selection_reason", ""))
+                reference["score_breakdown"] = decision.get("score_breakdown", {})
+                ranked.append((score, reference, decision))
+            ranked.sort(key=lambda item: item[0], reverse=True)
+            top = ranked[:max_refs]
+            references = [item[1] for item in top]
+            selected_trace = [
+                {
+                    "proposal_id": str(item[2].get("proposal_id", "")),
+                    "score": item[2].get("score"),
+                    "selection_reason": item[2].get("selection_reason", ""),
+                    "score_breakdown": item[2].get("score_breakdown", {}),
+                }
+                for item in top
+            ]
+        except Exception:
+            references = []
+
+        if len(references) == 0:
+            fallback = self._load_reference_models_from_file(max_refs)
+            if len(fallback) > 0:
+                if self.state.run_id:
+                    self.api.add_event(
+                        run_id,
+                        "llm_reference_models_fallback",
+                        "S'han usat models de referència locals per al prompt",
+                        {"count": len(fallback), "reason": "no_eligible_ranked_models"},
+                    )
+                return fallback, {
+                    "policy_version": str(policy.get("policy_version", "selection_policy_v1")),
+                    "selected": [
+                        {
+                            "proposal_id": "local_seed",
+                            "score": None,
+                            "selection_reason": "local_fallback",
+                        }
+                    ],
+                    "rejected": rejected_trace[:10],
+                    "fallback_used": True,
+                }
+        return references, {
+            "policy_version": str(policy.get("policy_version", "selection_policy_v1")),
+            "selected": selected_trace,
+            "rejected": rejected_trace[:10],
+            "fallback_used": False,
+        }
 
     def _create_model_proposal_if_enabled(self, run_id: str, generation: int, metrics: dict[str, float | int]) -> None:
         if not self.config.llm_enabled:
@@ -784,11 +1003,12 @@ class EvolutionWorkerEngine:
         )
         return None
 
-    def _pending_training_counts(self, run_id: str) -> dict[str, int]:
+    def _get_run_global_counts(self, run_id: str) -> dict[str, int]:
+        """Compta l'estat global de tots els models de la run."""
         active_statuses = {"draft", "queued_phase0", "validated_phase0", "accepted", "training"}
         counts = {"total": 0, "active": 0, "trained": 0, "rejected": 0}
         try:
-            proposals = self.api.list_model_proposals(limit=500)
+            proposals = self.api.list_model_proposals(limit=1000)
         except Exception:
             return counts
         for proposal in proposals:
@@ -804,63 +1024,72 @@ class EvolutionWorkerEngine:
                 counts["rejected"] += 1
         return counts
 
-    def _wait_for_training_queue_to_drain(self, run_id: str) -> None:
-        timeout_seconds = max(60, int(os.getenv("V2_WAIT_FOR_TRAINING_DRAIN_SECONDS", "86400")))
-        poll_seconds = max(5, int(os.getenv("V2_WAIT_FOR_TRAINING_DRAIN_POLL_SECONDS", "10")))
-        started = time.time()
-        self.api.add_event(run_id, "training_drain_wait_started", "Esperant que s'acabi la cua d'entrenament", {"timeout_seconds": timeout_seconds})
-        while True:
-            self._send_heartbeat()
-            self._process_queued_proposals_phase0_if_enabled()
-            counts = self._pending_training_counts(run_id)
-            if counts["total"] > 0 and counts["active"] == 0:
-                self.api.add_event(run_id, "training_drain_wait_completed", "Cua d'entrenament buidada", counts)
-                return
-            if time.time() - started > timeout_seconds:
-                self.api.add_event(run_id, "training_drain_wait_timeout", "Timeout esperant la cua d'entrenament", counts)
-                raise TimeoutError(f"training queue did not drain for run {run_id}: {counts}")
-            time.sleep(poll_seconds)
-
     def run(self) -> None:
         self._ensure_run()
         run_id = self.state.run_id
         if not run_id:
             raise RuntimeError("run_id not available")
-        if self.state.status == "completed" or self.state.generation >= self.config.max_generations:
-            self.state.status = "completed"
-            self.state.stage = "finished"
-            self._save_state()
+            
+        # 1. Neteja de processos orfes del trainer
+        self.supervisor.stop()
+        
+        # 2. Inici de la sessió
+        if self.state.status == "completed":
+            print("🏁 Run ja completada.")
             return
+
         self._verify_legacy_model_build_if_enabled()
         self._bootstrap_seed_model_if_needed(run_id)
         self._process_queued_proposals_phase0_if_enabled()
         self.api.update_status(run_id, "running", self.state.generation)
-        last_heartbeat = 0.0
-        if self.state.generation == 0:
-            self._run_generation_step(0)
-            print("🪜 Generació 0 completada com a baseline; les propostes noves comencen a la generació 1")
-        next_generation = max(1, self.state.generation)
-        prefetched_generation: int | None = None
-        while next_generation <= self.config.max_generations:
-            now = time.time()
-            if now - last_heartbeat >= self.config.heartbeat_interval_seconds:
-                self._send_heartbeat()
-                self._process_queued_proposals_phase0_if_enabled()
-                last_heartbeat = now
-            current_generation = next_generation
-            if prefetched_generation == current_generation:
-                prefetched_generation = None
-            else:
-                self._run_generation_step(current_generation)
-            self._process_queued_proposals_phase0_if_enabled()
-            prefetch_target = current_generation + 1 if current_generation < self.config.max_generations else None
-            prefetched_generation = self._wait_for_generation_to_drain(run_id, current_generation, prefetch_target)
-            next_generation = current_generation + 1
-            time.sleep(1)
-        self._process_queued_proposals_phase0_if_enabled()
-        self._wait_for_training_queue_to_drain(run_id)
-        self.api.update_status(run_id, "completed", self.state.generation)
-        self.api.add_event(run_id, "run_completed", "Execució finalitzada")
-        self.state.status = "completed"
-        self.state.stage = "finished"
-        self._save_state()
+        
+        # 3. Iniciar el Trainer en un procés separat (Opció A: Supervisat)
+        self.supervisor.start()
+        
+        # 4. Quota i loop principal fluid
+        models_per_gen = max(1, int(self.config.llm_num_new_models))
+        target_quota = self.config.max_generations * models_per_gen
+        
+        last_maintenance = 0.0
+        print(f"🌊 Iniciant loop fluid supervisat. Quota objectiu: {target_quota} models entrenats.")
+        
+        try:
+            while True:
+                now = time.time()
+                
+                # Manteniment periòdic (Heartbeat, Supervisor, Repairs)
+                if now - last_maintenance >= self.config.heartbeat_interval_seconds:
+                    self._send_heartbeat()
+                    self._process_queued_proposals_phase0_if_enabled()
+                    self._process_training_rejections() # <-- Afegit aquí
+                    self.supervisor.ensure_alive() # El supervisor vigila i reinicia el trainer si cal
+                    last_maintenance = now
+                
+                # Comprovar quota global
+                counts = self._get_run_global_counts(run_id)
+                trained_count = counts["trained"]
+                active_count = counts["active"]
+                
+                if trained_count >= target_quota:
+                    print(f"✅ Quota assolida: {trained_count}/{target_quota} models entrenats.")
+                    break
+                
+                # Si no hi ha prou models en marxa per omplir la quota
+                if active_count + trained_count < target_quota:
+                    # Calculem quina "generació" estem omplint (etiqueta metadata)
+                    current_gen = (trained_count // models_per_gen) + 1
+                    print(f"補充 Generant nous models per la quota (actual: {trained_count} trained, {active_count} active)...")
+                    self._run_generation_step(current_gen)
+                
+                time.sleep(10)
+                
+        except KeyboardInterrupt:
+            print("\n👋 Worker interromput per l'usuari.")
+        finally:
+            # 5. Tancament segur
+            self.supervisor.stop()
+            self.api.update_status(run_id, "completed", self.state.generation)
+            self.api.add_event(run_id, "run_completed", "Execució finalitzada")
+            self.state.status = "completed"
+            self.state.stage = "finished"
+            self._save_state()

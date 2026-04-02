@@ -185,4 +185,21 @@ Notes operatives:
 
 - Si el trial mostra endpoint amb backticks o espais, fes `git pull` a `/content/b-ia` i torna a executar.
 - Missatges CUDA/cuDNN a Colab CPU són informatius; no impliquen error funcional del worker.
-- El trainer actualitza events per època (`model_training_epoch_start/end`) i registra artifact `trained_model` quan finalitza.
+- El trainer actualitza events per època i registra artifact `trained_model` quan finalitza.
+
+## Robustesa i Optimització de Memòria (V2.1)
+
+El worker de Colab inclou millores crítiques per gestionar datasets grans i evitar bloquejos:
+
+### Gestió de Memòria
+- **Càrrega en float32**: Totes les dades es carreguen en precisió simple, reduint el consum de RAM al 50%.
+- **Binary Cache (.npy)**: Els CSVs es converteixen automàticament a format binari en la primera lectura. Les següents càrregues són instantànies.
+- **Memory Mapping (mmap)**: Les dades font no ocupen RAM física fins que no s'utilitzen realment, permetent treballar amb datasets que superen la RAM del sistema.
+- **Pre-escalat Global**: Les dades s'escalen una sola vegada al principi del run, eliminant el temps de preparació per a cada model.
+
+### Arquitectura Supervisada (Watchdog)
+- **Multiprocessing**: El Trainer s'executa en un procés independent del Worker. Això aïlla el flux de generació de l'entrenament pesat de TensorFlow.
+- **Supervisor**: El Worker monitoritza el Trainer. Si detecta que el Trainer està encallat (més de 10 minuts sense registrar activitat a l'API), el mata i el reinicia automàticament.
+- **Flux Fluid**: S'ha eliminat la restricció rígida de generacions. El sistema ara treballa per **quota global**: seguirà generant i reparant models fins a assolir el nombre total de models entrenats configurat (ex: 4 gens x 2 models = 8 models totals).
+- **Campions Globals**: L'LLM rep sempre els millors models de tota la run com a referència, garantint que l'evolució es basa en el millor coneixement disponible en cada moment.
+- **Neteja Automàtica**: En iniciar, el worker tanca qualsevol procés orfe de sessions anteriors per evitar conflictes de recursos.
