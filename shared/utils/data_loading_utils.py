@@ -6,9 +6,16 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from shared.utils.runtime_log_utils import should_log
+
 
 def _mb(arr: np.ndarray) -> float:
     return round(float(arr.nbytes) / (1024.0 * 1024.0), 2)
+
+
+def _log_loading(message: str, level: str = "summary") -> None:
+    if should_log("V2_LOG_DATA_LOADING", level=level, default="summary"):
+        print(message)
 
 
 def load_all_raw_data_sources(
@@ -50,23 +57,23 @@ def load_all_raw_data_sources(
                 loaded_data[csv_key] = arr
                 current_mb = _mb(arr)
                 total_loaded_mb += current_mb
-                print(f"✅ Cache binària (mmap) carregada: {file_name}.npy ({len(arr)} files, dtype={arr.dtype}, ~{current_mb} MB)")
+                _log_loading(f"✅ Cache binària (mmap) carregada: {file_name}.npy ({len(arr)} files, dtype={arr.dtype}, ~{current_mb} MB)", level="verbose")
                 continue
             
             # If not in cache or cache stale, load CSV
-            print(f"📄 Carregant CSV: {file_name}...")
+            _log_loading(f"📄 Carregant CSV: {file_name}...", level="verbose")
             arr = pd.read_csv(file_path, header=None, dtype=np.float32).values
             loaded_data[csv_key] = arr
             current_mb = _mb(arr)
             total_loaded_mb += current_mb
-            print(f"✅ CSV carregat: {file_name} ({len(arr)} files, dtype={arr.dtype}, ~{current_mb} MB)")
+            _log_loading(f"✅ CSV carregat: {file_name} ({len(arr)} files, dtype={arr.dtype}, ~{current_mb} MB)", level="verbose")
             
             # Save to binary cache for next time
             try:
                 np.save(npy_path, arr)
-                print(f"💾 Cache binària guardada: {file_name}.npy")
+                _log_loading(f"💾 Cache binària guardada: {file_name}.npy", level="verbose")
             except Exception as e:
-                print(f"⚠️ No s'ha pogut guardar la cache binària per {file_name}: {e}")
+                _log_loading(f"⚠️ No s'ha pogut guardar la cache binària per {file_name}: {e}", level="summary")
                 
         except Exception:
             try:
@@ -81,7 +88,7 @@ def load_all_raw_data_sources(
             except Exception:
                 loaded_data[csv_key] = np.array([], dtype=np.float32)
 
-    print(f"📦 Dades font carregades: {len(loaded_data)} arrays, ús aproximat ~{round(total_loaded_mb, 2)} MB")
+    _log_loading(f"📦 Dades font carregades: {len(loaded_data)} arrays, ús aproximat ~{round(total_loaded_mb, 2)} MB", level="summary")
     return loaded_data
 
 
@@ -136,8 +143,8 @@ def derive_additional_features_and_targets(
         if isinstance(value, np.ndarray) and value.size > 0:
             summary.append(f"{key}: shape={value.shape}, dtype={value.dtype}, ~{_mb(value)} MB")
     if summary:
-        print("🧾 Resum de tensores derivats:")
+        _log_loading("🧾 Resum de tensores derivats:", level="summary")
         for line in summary[:20]:
-            print(f"   - {line}")
+            _log_loading(f"   - {line}", level="verbose")
 
     return data_dict

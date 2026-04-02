@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from shared.utils.selection_policy import evaluate_reference_candidate, load_policy_config_from_env
+from shared.utils.runtime_log_utils import env_log_level
 
 try:
     from .api_client import ApiClient
@@ -146,6 +147,7 @@ class EvolutionWorkerEngine:
         self.checkpoints = checkpoint_store
         self.state = self._load_state()
         self.last_llm_call_ts = 0.0
+        self.last_progress_snapshot_key: tuple[object, ...] | None = None
         self.repo_root = Path(__file__).resolve().parents[2]
         self.llm = LlmProposalClient(
             LlmConfig(
@@ -978,6 +980,7 @@ class EvolutionWorkerEngine:
         return generation_label, candidate_index, candidates_expected
 
     def _emit_progress_snapshot(self, run_id: str, counts: dict[str, int], stage: str, stage_label: str) -> None:
+        progress_mode = env_log_level("V2_LOG_PROGRESS_EVENTS", default="changes")
         target_models_total = self._target_models_total()
         buffer_target = self._active_buffer_target(target_models_total)
         payload = {
@@ -996,6 +999,20 @@ class EvolutionWorkerEngine:
             "target_models_total": target_models_total,
             "active_buffer_target": buffer_target,
         }
+        payload_signature = (
+            stage,
+            stage_label,
+            payload["models_generated"],
+            payload["models_trained"],
+            payload["models_rejected"],
+            payload["active_models_count"],
+        )
+        if progress_mode == "off" and stage not in {"completed", "failed", "cancelled"}:
+            return
+        if progress_mode in {"summary", "changes"} and stage not in {"completed", "failed", "cancelled"}:
+            if payload_signature == self.last_progress_snapshot_key:
+                return
+        self.last_progress_snapshot_key = payload_signature
         print(json.dumps(payload, ensure_ascii=True), flush=True)
 
     def _replenish_active_buffer(self, run_id: str, counts: dict[str, int], target_models_total: int, buffer_target: int) -> int:
