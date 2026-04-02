@@ -1001,6 +1001,7 @@ class EvolutionWorkerEngine:
     def _replenish_active_buffer(self, run_id: str, counts: dict[str, int], target_models_total: int, buffer_target: int) -> int:
         trained_count = int(counts.get("trained", 0))
         active_count = int(counts.get("active", 0))
+        training_count = int(counts.get("training", 0))
         scheduled_count = int(counts.get("scheduled", counts.get("total", 0)))
         remaining_needed = max(0, target_models_total - trained_count)
         if remaining_needed <= 0:
@@ -1008,7 +1009,10 @@ class EvolutionWorkerEngine:
         pending_capacity_needed = max(0, target_models_total - trained_count - active_count)
         if pending_capacity_needed <= 0:
             return 0
-        buffer_gap = max(0, buffer_target - active_count)
+        effective_buffer_target = buffer_target
+        if trained_count <= 0 and training_count <= 0:
+            effective_buffer_target = min(buffer_target, 2)
+        buffer_gap = max(0, effective_buffer_target - active_count)
         if buffer_gap <= 0:
             return 0
         creation_budget = min(buffer_gap, pending_capacity_needed, 2)
@@ -1022,7 +1026,7 @@ class EvolutionWorkerEngine:
             }
             print(
                 f"🔁 Reomplint buffer: proposta {proposal_sequence}/{target_models_total} "
-                f"(Gen {generation_label}, Cand {candidate_index}, active={active_count + created_total}/{buffer_target})..."
+                f"(Gen {generation_label}, Cand {candidate_index}, active={active_count + created_total}/{effective_buffer_target})..."
             )
             created_now = self._create_model_proposal_if_enabled(
                 run_id,
@@ -1042,7 +1046,18 @@ class EvolutionWorkerEngine:
     def _get_run_global_counts(self, run_id: str) -> dict[str, int]:
         """Compta l'estat global de tots els models de la run."""
         active_statuses = {"draft", "queued_phase0", "validated_phase0", "accepted", "training"}
-        counts = {"total": 0, "scheduled": 0, "active": 0, "trained": 0, "rejected": 0}
+        counts = {
+            "total": 0,
+            "scheduled": 0,
+            "active": 0,
+            "trained": 0,
+            "rejected": 0,
+            "draft": 0,
+            "queued_phase0": 0,
+            "validated_phase0": 0,
+            "accepted": 0,
+            "training": 0,
+        }
         try:
             proposals = self.api.list_model_proposals(limit=1000)
         except Exception:
@@ -1057,6 +1072,8 @@ class EvolutionWorkerEngine:
             status = str(proposal.get("status", ""))
             if status in active_statuses:
                 counts["active"] += 1
+                if status in counts:
+                    counts[status] += 1
             elif status == "trained":
                 counts["trained"] += 1
             elif status == "rejected":
