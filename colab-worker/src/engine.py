@@ -147,7 +147,6 @@ class EvolutionWorkerEngine:
         self.state = self._load_state()
         self.last_llm_call_ts = 0.0
         self.repo_root = Path(__file__).resolve().parents[2]
-        self.supervisor = TrainerSupervisor(self.api, self.repo_root)
         self.llm = LlmProposalClient(
             LlmConfig(
                 enabled=self.config.llm_enabled,
@@ -1073,10 +1072,7 @@ class EvolutionWorkerEngine:
         final_status = "completed"
         final_label = "Execució finalitzada"
 
-        # 1. Neteja de processos orfes del trainer
-        self.supervisor.stop()
-
-        # 2. Inici de la sessió
+        # 1. Inici de la sessió
         if self.state.status == "completed":
             print("🏁 Run ja completada.")
             return
@@ -1087,10 +1083,7 @@ class EvolutionWorkerEngine:
         self._process_queued_proposals_phase0_if_enabled()
         self.api.update_status(run_id, "running", self.state.generation)
 
-        # 3. Iniciar el Trainer en un procés separat (Supervisor)
-        self.supervisor.start()
-
-        # 4. Scheduler continu basat en target i buffer
+        # 2. Scheduler continu basat en target i buffer
         target_models_total = self._target_models_total()
         active_buffer_target = self._active_buffer_target(target_models_total)
 
@@ -1104,13 +1097,12 @@ class EvolutionWorkerEngine:
             while True:
                 now = time.time()
 
-                # Manteniment periòdic (Heartbeat, Supervisor, Repairs)
+                # Manteniment periòdic (Heartbeat, Repairs)
                 if now - last_maintenance >= self.config.heartbeat_interval_seconds:
                     self._send_heartbeat()
                     # El Worker valida la phase0 de les propostes que ell mateix crea
                     self._process_queued_proposals_phase0_if_enabled()
                     self._process_training_rejections()
-                    self.supervisor.ensure_alive()
                     last_maintenance = now
 
                 # Estat global i progress operatiu
@@ -1162,7 +1154,6 @@ class EvolutionWorkerEngine:
                 pass
             raise
         finally:
-            self.supervisor.stop()
             self.api.update_status(run_id, final_status, self.state.generation)
             if final_status == "completed":
                 self.api.add_event(run_id, "run_completed", final_label)
