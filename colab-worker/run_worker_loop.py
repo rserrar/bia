@@ -251,12 +251,16 @@ def _execute_request(client: ApiClient, request_id: str, request: dict, worker_i
     max_training_seconds_int = _as_non_negative_int(config.get("max_training_seconds", 0), 0)
     generations = str(generations_int)
     models_per_generation = str(models_per_generation_int)
+    target_models_total_int = _as_positive_int(config.get("target_models_total", generations_int * models_per_generation_int), generations_int * models_per_generation_int)
+    active_buffer_target_int = _as_positive_int(config.get("active_buffer_target", max(2, min(target_models_total_int, models_per_generation_int * 2))), max(2, min(target_models_total_int, models_per_generation_int * 2)))
     extra_env = {
         "V2_SELECTION_POLICY_PROFILE": profile,
         "V2_LLM_TRIAL_GENERATIONS": generations,
         "V2_E2E_GENERATIONS": generations,
         "V2_LLM_NUM_NEW_MODELS": models_per_generation,
         "V2_MODELS_PER_GENERATION": models_per_generation,
+        "V2_TARGET_MODELS_TOTAL": str(target_models_total_int),
+        "V2_ACTIVE_BUFFER_TARGET": str(active_buffer_target_int),
         "V2_MAX_EPOCHS": str(max_epochs_int),
         "V2_TRAINER_MAX_SECONDS": str(max_training_seconds_int),
         "V2_EXECUTION_REQUEST_ID": request_id,
@@ -276,6 +280,8 @@ def _execute_request(client: ApiClient, request_id: str, request: dict, worker_i
         "generations_total": generations_int,
         "generations_completed": 0,
         "models_per_generation": models_per_generation_int,
+        "target_models_total": target_models_total_int,
+        "active_buffer_target": active_buffer_target_int,
         "max_epochs": max_epochs_int,
         "max_training_seconds": max_training_seconds_int,
         "models_generated": 0,

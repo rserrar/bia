@@ -44,6 +44,8 @@ class WorkerConfig:
     checkpoint_path: str
     heartbeat_interval_seconds: int
     max_generations: int
+    target_models_total: int
+    active_buffer_target: int
     auto_process_proposals_phase0: bool
     proposals_phase0_batch_size: int
     bootstrap_seed_model_if_empty: bool
@@ -129,6 +131,8 @@ def load_worker_config() -> WorkerConfig:
         checkpoint_path=os.getenv("V2_CHECKPOINT_PATH", "/content/drive/MyDrive/bia_v2/run_state.json"),
         heartbeat_interval_seconds=int(os.getenv("V2_HEARTBEAT_INTERVAL_SECONDS", "30")),
         max_generations=int(os.getenv("V2_MAX_GENERATIONS", "3")),
+        target_models_total=max(0, int(os.getenv("V2_TARGET_MODELS_TOTAL", "0") or 0)),
+        active_buffer_target=max(0, int(os.getenv("V2_ACTIVE_BUFFER_TARGET", "0") or 0)),
         auto_process_proposals_phase0=os.getenv("V2_AUTO_PROCESS_PROPOSALS_PHASE0", "true").lower() in {"1", "true", "yes"},
         proposals_phase0_batch_size=int(os.getenv("V2_PROPOSALS_PHASE0_BATCH_SIZE", "20")),
         bootstrap_seed_model_if_empty=os.getenv("V2_BOOTSTRAP_SEED_MODEL_IF_EMPTY", "true").lower() in {"1", "true", "yes"},

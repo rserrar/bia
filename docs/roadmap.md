@@ -64,7 +64,8 @@ Focus actual:
 
 - supervisor amb auto-restart i auto-feed,
 - persistencia completa de metadades training,
-- documentacio centralitzada i auditada.
+- documentacio centralitzada i auditada,
+- redisseny del runtime cap a model continu amb rols separats.
 
 Estat: en curs.
 
@@ -75,6 +76,7 @@ Línies de treball actuals dins aquesta fase:
 - reforçar `phase0` i repair/replacement automàtic
 - assegurar que les execucions no es tanquen fins que la cua de training està drenada
 - millorar la documentació de proves i interpretació d'execucions
+- desacoblar controller, generator, trainer i watchdog segons `runtime_robustness_plan.md`
 
 ## Proper resultat esperat
 
@@ -83,3 +85,4 @@ Línies de treball actuals dins aquesta fase:
 3. Tancament de migracio documental i retirada de duplicats restants.
 4. Visibilitat millor del provider LLM usat (`openai` o `gemini`) a monitor/autòpsia.
 5. Validació estable de proves llargues sobre dataset gran des de Colab.
+6. Migracio del runtime des de logica per generacions a buffer continu robust.

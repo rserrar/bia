@@ -6,6 +6,8 @@ La V2 separa calcul, coordinacio i observabilitat en tres capes:
 2. Server API (PHP) per estat, cues, events, metrics i artifacts.
 3. Capa d'operacio (monitor web + scripts ops) per visibilitat i control.
 
+Per al redisseny de robustesa orientat a execucions llargues, veure tambe `runtime_robustness_plan.md`, que refina aquesta separacio en rols operatius independents (`controller`, `generator`, `trainer`, `watchdog`).
+
 ## Logical data flow
 
 - El worker crea/recupera `run`.

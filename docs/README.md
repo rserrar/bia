@@ -20,4 +20,5 @@ Punt d'entrada unificat de documentacio V2.
 - Known errors: `errors.md`
 - Observability: `observability.md`
 - Runtime flow: `runtime_flow.md`
+- Runtime robustness plan: `runtime_robustness_plan.md`
 - Operations notes: `operations.md`

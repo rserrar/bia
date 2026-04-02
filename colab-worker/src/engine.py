@@ -249,20 +249,24 @@ class EvolutionWorkerEngine:
             if str(proposal.get("status", "")) != "rejected":
                 continue
             llm_metadata = proposal.get("llm_metadata") if isinstance(proposal.get("llm_metadata"), dict) else {}
-            # Si té error d'entrenament i encara no s'ha intentat reparar
-            if "training_error" in llm_metadata and "repair_replacement_proposal_id" not in llm_metadata:
-                # Evitem re-intentar si ja hem arribat al límit de profunditat
-                if int(llm_metadata.get("repair_depth", 0)) >= 1:
-                    continue
-                try:
-                    self._attempt_repair_rejected_training_proposal(proposal)
-                except Exception as e:
-                    print(f"⚠️ Error intentant reparar fallada d'entrenament a {proposal.get('proposal_id')}: {e}")
+            if "training_error" not in llm_metadata:
+                continue
+            if llm_metadata.get("repair_exhausted") is True:
+                continue
+            if llm_metadata.get("repair_replacement_proposal_id") or llm_metadata.get("phase0_repair_replacement_proposal_id"):
+                continue
+            if int(llm_metadata.get("repair_depth", 0) or 0) >= 1:
+                continue
+            try:
+                self._attempt_repair_rejected_training_proposal(proposal)
+            except Exception as e:
+                print(f"⚠️ Error intentant reparar fallada d'entrenament a {proposal.get('proposal_id')}: {e}")
 
     def _attempt_repair_rejected_training_proposal(self, proposal: dict[str, Any]) -> None:
         run_id = self.state.run_id
         if not run_id:
             return
+        proposal_id = str(proposal.get("proposal_id", "")).strip()
         llm_metadata = proposal.get("llm_metadata") if isinstance(proposal.get("llm_metadata"), dict) else {}
         error_message = str(llm_metadata.get("training_error", "Unknown training error"))
         
@@ -301,8 +305,16 @@ class EvolutionWorkerEngine:
                 candidate_to_submit = self.llm.generate_candidate(context)
                 if candidate_to_submit:
                     self._submit_training_repaired_candidate(run_id, proposal, candidate_to_submit, error_message, "replacement", 2)
+                else:
+                    self.api.update_proposal_status(proposal_id, str(proposal.get("status", "rejected")), {"repair_exhausted": True, "repair_attempts_total": 2, "repair_last_error": error_message})
+                    self.api.add_event(run_id, "training_repair_exhausted", f"Repair/replacement esgotat per {proposal_id}", {"proposal_id": proposal_id, "error": error_message})
         except Exception as e:
             print(f"❌ Fallida crítica en la reparació de training per {proposal.get('proposal_id')}: {e}")
+            if proposal_id != "":
+                try:
+                    self.api.update_proposal_status(proposal_id, str(proposal.get("status", "rejected")), {"repair_exhausted": True, "repair_last_error": str(e)})
+                except Exception:
+                    pass
 
     def _submit_training_repaired_candidate(self, run_id: str, original_proposal: dict[str, Any], candidate: dict[str, Any], error_message: str, mode: str, attempt: int) -> None:
         # Reutilitzem la lògica de submissió de phase0 adaptada
@@ -422,14 +434,30 @@ class EvolutionWorkerEngine:
             "fallback_used": False,
         }
 
-    def _create_model_proposal_if_enabled(self, run_id: str, generation: int, metrics: dict[str, float | int]) -> None:
+    def _create_model_proposal_if_enabled(
+        self,
+        run_id: str,
+        generation: int,
+        metrics: dict[str, float | int],
+        specific_candidate_index: int | None = None,
+        candidates_expected: int | None = None,
+    ) -> int:
         if not self.config.llm_enabled:
-            return
+            return 0
         proposals_per_generation = max(1, int(self.config.llm_num_new_models))
+        effective_candidates_expected = max(1, int(candidates_expected or proposals_per_generation))
+        if specific_candidate_index is None:
+            candidate_numbers = list(range(1, proposals_per_generation + 1))
+        else:
+            candidate_number = max(1, int(specific_candidate_index))
+            if candidate_number > effective_candidates_expected:
+                return 0
+            candidate_numbers = [candidate_number]
         reference_models, reference_trace = self._collect_reference_models_for_prompt(run_id)
         recent_generated_models = self._collect_recent_generated_models(run_id)
+        created_count = 0
 
-        for candidate_index in range(proposals_per_generation):
+        for candidate_number in candidate_numbers:
             self._respect_llm_min_interval()
 
             context = {
@@ -440,20 +468,20 @@ class EvolutionWorkerEngine:
                 "reference_models": reference_models,
                 "reference_selection_trace": reference_trace,
                 "recent_generated_models": recent_generated_models,
-                "candidate_index": candidate_index + 1,
-                "candidates_expected": proposals_per_generation,
+                "candidate_index": candidate_number,
+                "candidates_expected": effective_candidates_expected,
             }
 
             try:
                 self._mark_llm_call_started()
                 print(
-                    f"🤖 Fent petició al LLM per generar proposta {candidate_index + 1}/{proposals_per_generation} "
+                    f"🤖 Fent petició al LLM per generar proposta {candidate_number}/{effective_candidates_expected} "
                     f"de la generació {generation}."
                 )
                 candidate = self.llm.generate_candidate(context)
-                print(f"📩 Resposta rebuda de l'LLM per generació {generation} candidat {candidate_index + 1}")
+                print(f"📩 Resposta rebuda de l'LLM per generació {generation} candidat {candidate_number}")
                 if not candidate:
-                    print(f"⚠️ L'LLM no ha retornat cap proposta útil per generació {generation} candidat {candidate_index + 1}")
+                    print(f"⚠️ L'LLM no ha retornat cap proposta útil per generació {generation} candidat {candidate_number}")
                     continue
                 base_model_id = str(candidate.get("base_model_id", "")).strip() or "unknown_base_model"
                 proposal = candidate.get("proposal")
@@ -462,21 +490,21 @@ class EvolutionWorkerEngine:
                 llm_metadata = candidate.get("llm_metadata")
                 llm_metadata_payload = llm_metadata if isinstance(llm_metadata, dict) else {}
                 llm_metadata_payload["from_generation"] = generation
-                llm_metadata_payload["candidate_index"] = candidate_index + 1
-                llm_metadata_payload["candidates_expected"] = proposals_per_generation
+                llm_metadata_payload["candidate_index"] = candidate_number
+                llm_metadata_payload["candidates_expected"] = effective_candidates_expected
                 proposal_fingerprint = self.llm.proposal_fingerprint(proposal)
                 llm_metadata_payload["proposal_fingerprint"] = proposal_fingerprint
 
                 if self._proposal_fingerprint_exists(run_id, proposal_fingerprint):
-                    print(f"🪞 Proposta duplicada descartada per fingerprint a generació {generation} candidat {candidate_index + 1}")
+                    print(f"🪞 Proposta duplicada descartada per fingerprint a generació {generation} candidat {candidate_number}")
                     self.api.add_event(
                         run_id,
                         "llm_duplicate_skipped",
                         f"Proposta duplicada descartada a generació {generation}",
                         {
                             "proposal_fingerprint": proposal_fingerprint,
-                            "candidate_index": candidate_index + 1,
-                            "candidates_expected": proposals_per_generation,
+                            "candidate_index": candidate_number,
+                            "candidates_expected": effective_candidates_expected,
                         },
                     )
                     continue
@@ -502,13 +530,14 @@ class EvolutionWorkerEngine:
                 proposal_id = str(created.get("proposal_id", ""))
                 if proposal_id != "":
                     self.api.enqueue_model_proposal_phase0(proposal_id)
-                    print(f"🧩 Proposal creada i enviada a phase0: {proposal_id} (gen={generation}, candidat={candidate_index + 1})")
+                    print(f"🧩 Proposal creada i enviada a phase0: {proposal_id} (gen={generation}, candidat={candidate_number})")
                     recent_generated_models.insert(0, {
                         "proposal_id": proposal_id,
                         "fingerprint": proposal_fingerprint,
                         "summary": self._summarize_model_definition(proposal),
                     })
                     recent_generated_models = recent_generated_models[:5]
+                    created_count += 1
                 self.api.add_event(
                     run_id,
                     "llm_proposal_created",
@@ -516,25 +545,25 @@ class EvolutionWorkerEngine:
                     {
                         "proposal_id": proposal_id,
                         "base_model_id": base_model_id,
-                        "candidate_index": candidate_index + 1,
-                        "candidates_expected": proposals_per_generation,
+                        "candidate_index": candidate_number,
+                        "candidates_expected": effective_candidates_expected,
                     },
                 )
             except LlmRateLimitError as error:
-                print(f"⛔ Rate limit LLM a generació {generation} candidat {candidate_index + 1}: {error}")
+                print(f"⛔ Rate limit LLM a generació {generation} candidat {candidate_number}: {error}")
                 self.api.add_event(
                     run_id,
                     "llm_rate_limited",
                     f"Rate limit LLM a generació {generation}",
                     {
                         "error": str(error),
-                        "candidate_index": candidate_index + 1,
-                        "candidates_expected": proposals_per_generation,
+                        "candidate_index": candidate_number,
+                        "candidates_expected": effective_candidates_expected,
                     },
                 )
                 raise
             except Exception as error:
-                print(f"❌ Error generant proposta a generació {generation} candidat {candidate_index + 1}: {error}")
+                print(f"❌ Error generant proposta a generació {generation} candidat {candidate_number}: {error}")
                 diagnostic_details = self._llm_error_details(error)
                 self.api.add_event(
                     run_id,
@@ -542,95 +571,12 @@ class EvolutionWorkerEngine:
                     f"Error creant proposta LLM a generació {generation}",
                     {
                         "error": str(error),
-                        "candidate_index": candidate_index + 1,
-                        "candidates_expected": proposals_per_generation,
+                        "candidate_index": candidate_number,
+                        "candidates_expected": effective_candidates_expected,
                         "llm_error_details": diagnostic_details,
                     },
                 )
-
-    def _collect_reference_models_for_prompt(self, run_id: str) -> tuple[list[dict[str, object]], dict[str, Any]]:
-        max_refs = max(0, int(self.config.llm_num_reference_models))
-        if max_refs <= 0:
-            return [], {"policy_version": "selection_policy_v1", "selected": [], "rejected": []}
-
-        references: list[dict[str, object]] = []
-        selected_trace: list[dict[str, Any]] = []
-        rejected_trace: list[dict[str, Any]] = []
-        policy = load_policy_config_from_env()
-        try:
-            proposals = self.api.list_model_proposals(limit=300)
-            ranked: list[tuple[float, dict[str, object], dict[str, Any]]] = []
-            for proposal in proposals:
-                payload = proposal.get("proposal")
-                if not isinstance(payload, dict):
-                    continue
-                model_definition = payload.get("model_definition")
-                if not isinstance(model_definition, dict):
-                    continue
-                decision = evaluate_reference_candidate(proposal, config=policy)
-                if not bool(decision.get("eligible")):
-                    rejected_trace.append(
-                        {
-                            "proposal_id": str(proposal.get("proposal_id", "")),
-                            "status": str(proposal.get("status", "")),
-                            "selection_reason": str(decision.get("selection_reason", "")),
-                            "constraints_failed": decision.get("constraints_failed", []),
-                            "score": decision.get("score"),
-                        }
-                    )
-                    continue
-                score = float(decision.get("score", 0.0))
-                reference: dict[str, object] = dict(model_definition)
-                reference["model_id"] = str(model_definition.get("model_id", proposal.get("proposal_id", "unknown_model")))
-                reference["reference_status"] = str(proposal.get("status", ""))
-                reference["reference_source_run_id"] = str(proposal.get("source_run_id", ""))
-                reference["selection_score"] = score
-                reference["selection_reason"] = str(decision.get("selection_reason", ""))
-                reference["score_breakdown"] = decision.get("score_breakdown", {})
-                ranked.append((score, reference, decision))
-            ranked.sort(key=lambda item: item[0], reverse=True)
-            top = ranked[:max_refs]
-            references = [item[1] for item in top]
-            selected_trace = [
-                {
-                    "proposal_id": str(item[2].get("proposal_id", "")),
-                    "score": item[2].get("score"),
-                    "selection_reason": item[2].get("selection_reason", ""),
-                    "score_breakdown": item[2].get("score_breakdown", {}),
-                }
-                for item in top
-            ]
-        except Exception:
-            references = []
-
-        if len(references) == 0:
-            fallback = self._load_reference_models_from_file(max_refs)
-            if len(fallback) > 0:
-                if self.state.run_id:
-                    self.api.add_event(
-                        run_id,
-                        "llm_reference_models_fallback",
-                        "S'han usat models de referència locals per al prompt",
-                        {"count": len(fallback), "reason": "no_eligible_ranked_models"},
-                    )
-                return fallback, {
-                    "policy_version": str(policy.get("policy_version", "selection_policy_v1")),
-                    "selected": [
-                        {
-                            "proposal_id": "local_seed",
-                            "score": None,
-                            "selection_reason": "local_fallback",
-                        }
-                    ],
-                    "rejected": rejected_trace[:10],
-                    "fallback_used": True,
-                }
-        return references, {
-            "policy_version": str(policy.get("policy_version", "selection_policy_v1")),
-            "selected": selected_trace,
-            "rejected": rejected_trace[:10],
-            "fallback_used": False,
-        }
+        return created_count
 
     def _collect_recent_generated_models(self, run_id: str) -> list[dict[str, str]]:
         recent: list[dict[str, str]] = []
@@ -803,24 +749,15 @@ class EvolutionWorkerEngine:
         run_id = self.state.run_id
         if not run_id:
             return
+        # El Worker NOMÉS valida la phase0 estructural, no entrena.
+        # Això evita que el Worker i el Trainer competeixin pels mateixos recursos.
         try:
             result = self.api.process_model_proposals_phase0(self.config.proposals_phase0_batch_size)
             processed_count = int(result.get("processed_count", 0))
             if processed_count > 0:
                 self._handle_phase0_rejections(result)
-                self.api.add_event(
-                    run_id,
-                    "proposal_phase0_auto_processed",
-                    f"Propostes processades automàticament: {processed_count}",
-                    result,
-                )
         except Exception as error:
-            self.api.add_event(
-                run_id,
-                "proposal_phase0_auto_process_error",
-                "Error en processament automàtic de proposals queued_phase0",
-                {"error": str(error)},
-            )
+            print(f"⚠️ Error en processament automàtic de phase0: {error}")
 
     def _handle_phase0_rejections(self, result: dict[str, Any]) -> None:
         run_id = self.state.run_id
@@ -921,6 +858,18 @@ class EvolutionWorkerEngine:
             f"No s'ha pogut reparar proposal rebutjada a phase0: {proposal.get('proposal_id', '')}",
             {"proposal_id": proposal.get("proposal_id"), "reason": rejection_reason, "attempts": max_attempts},
         )
+        try:
+            self.api.update_proposal_status(
+                str(proposal.get("proposal_id", "")),
+                str(proposal.get("status", "rejected")),
+                {
+                    "repair_exhausted": True,
+                    "repair_attempts_total": max_attempts,
+                    "repair_last_error": rejection_reason,
+                },
+            )
+        except Exception:
+            pass
 
     def _submit_phase0_repaired_candidate(
         self,
@@ -981,6 +930,11 @@ class EvolutionWorkerEngine:
                     str(original_proposal.get("proposal_id", "")),
                     str(original_proposal.get("status", "rejected")),
                     {
+                        "repair_replacement_proposal_id": proposal_id,
+                        "repair_attempts_total": attempt_number,
+                        "repair_last_mode": mode,
+                        "repair_last_attempt": attempt_number,
+                        "repair_exhausted": False,
                         "phase0_repair_replacement_proposal_id": proposal_id,
                         "phase0_repair_last_mode": mode,
                         "phase0_repair_last_attempt": attempt_number,
@@ -1003,10 +957,90 @@ class EvolutionWorkerEngine:
         )
         return None
 
+    def _target_models_total(self) -> int:
+        configured = int(getattr(self.config, "target_models_total", 0) or 0)
+        if configured > 0:
+            return configured
+        models_per_generation = max(1, int(self.config.llm_num_new_models))
+        return max(1, int(self.config.max_generations) * models_per_generation)
+
+    def _active_buffer_target(self, target_models_total: int) -> int:
+        configured = int(getattr(self.config, "active_buffer_target", 0) or 0)
+        if configured > 0:
+            return max(1, min(configured, max(1, target_models_total)))
+        models_per_generation = max(1, int(self.config.llm_num_new_models))
+        return max(1, min(max(2, models_per_generation * 2), max(1, target_models_total)))
+
+    def _next_generation_labels(self, proposal_sequence: int) -> tuple[int, int, int]:
+        candidates_expected = max(1, int(self.config.llm_num_new_models))
+        normalized_sequence = max(1, proposal_sequence)
+        generation_label = ((normalized_sequence - 1) // candidates_expected) + 1
+        candidate_index = ((normalized_sequence - 1) % candidates_expected) + 1
+        return generation_label, candidate_index, candidates_expected
+
+    def _emit_progress_snapshot(self, run_id: str, counts: dict[str, int], stage: str, stage_label: str) -> None:
+        target_models_total = self._target_models_total()
+        buffer_target = self._active_buffer_target(target_models_total)
+        payload = {
+            "progress_event": True,
+            "run_id": run_id,
+            "current_run_id": run_id,
+            "run_ids": [run_id],
+            "stage": stage,
+            "stage_label": stage_label,
+            "generations_completed": int(self.state.generation),
+            "generations_total": max(1, int(self.config.max_generations)),
+            "models_generated": int(counts.get("scheduled", counts.get("total", 0))),
+            "models_trained": int(counts.get("trained", 0)),
+            "models_rejected": int(counts.get("rejected", 0)),
+            "active_models_count": int(counts.get("active", 0)),
+            "target_models_total": target_models_total,
+            "active_buffer_target": buffer_target,
+        }
+        print(json.dumps(payload, ensure_ascii=True), flush=True)
+
+    def _replenish_active_buffer(self, run_id: str, counts: dict[str, int], target_models_total: int, buffer_target: int) -> int:
+        trained_count = int(counts.get("trained", 0))
+        active_count = int(counts.get("active", 0))
+        scheduled_count = int(counts.get("scheduled", counts.get("total", 0)))
+        remaining_needed = max(0, target_models_total - trained_count)
+        if remaining_needed <= 0:
+            return 0
+        buffer_gap = max(0, buffer_target - active_count)
+        if buffer_gap <= 0:
+            return 0
+        creation_budget = min(buffer_gap, remaining_needed, 2)
+        created_total = 0
+        for _ in range(creation_budget):
+            proposal_sequence = scheduled_count + created_total + 1
+            generation_label, candidate_index, candidates_expected = self._next_generation_labels(proposal_sequence)
+            simulated_metric = {
+                "val_loss_total": round(1.0 / (generation_label + 1), 6),
+                "models_evaluated": max(1, counts.get("trained", 0)),
+            }
+            print(
+                f"🔁 Reomplint buffer: proposta {proposal_sequence}/{target_models_total} "
+                f"(Gen {generation_label}, Cand {candidate_index}, active={active_count + created_total}/{buffer_target})..."
+            )
+            created_now = self._create_model_proposal_if_enabled(
+                run_id,
+                generation_label,
+                simulated_metric,
+                specific_candidate_index=candidate_index,
+                candidates_expected=candidates_expected,
+            )
+            if created_now <= 0:
+                continue
+            created_total += created_now
+            self.state.generation = max(self.state.generation, generation_label)
+            self.state.stage = "buffer_replenished"
+            self._save_state()
+        return created_total
+
     def _get_run_global_counts(self, run_id: str) -> dict[str, int]:
         """Compta l'estat global de tots els models de la run."""
         active_statuses = {"draft", "queued_phase0", "validated_phase0", "accepted", "training"}
-        counts = {"total": 0, "active": 0, "trained": 0, "rejected": 0}
+        counts = {"total": 0, "scheduled": 0, "active": 0, "trained": 0, "rejected": 0}
         try:
             proposals = self.api.list_model_proposals(limit=1000)
         except Exception:
@@ -1015,6 +1049,9 @@ class EvolutionWorkerEngine:
             if str(proposal.get("source_run_id", "")) != run_id:
                 continue
             counts["total"] += 1
+            llm_metadata = proposal.get("llm_metadata") if isinstance(proposal.get("llm_metadata"), dict) else {}
+            if llm_metadata.get("seed_bootstrap") is not True:
+                counts["scheduled"] += 1
             status = str(proposal.get("status", ""))
             if status in active_statuses:
                 counts["active"] += 1
@@ -1029,10 +1066,13 @@ class EvolutionWorkerEngine:
         run_id = self.state.run_id
         if not run_id:
             raise RuntimeError("run_id not available")
-            
+
+        final_status = "completed"
+        final_label = "Execució finalitzada"
+
         # 1. Neteja de processos orfes del trainer
         self.supervisor.stop()
-        
+
         # 2. Inici de la sessió
         if self.state.status == "completed":
             print("🏁 Run ja completada.")
@@ -1040,56 +1080,91 @@ class EvolutionWorkerEngine:
 
         self._verify_legacy_model_build_if_enabled()
         self._bootstrap_seed_model_if_needed(run_id)
+        # El Worker NOMÉS valida la phase0 estructural, no entrena
         self._process_queued_proposals_phase0_if_enabled()
         self.api.update_status(run_id, "running", self.state.generation)
-        
-        # 3. Iniciar el Trainer en un procés separat (Opció A: Supervisat)
+
+        # 3. Iniciar el Trainer en un procés separat (Supervisor)
         self.supervisor.start()
-        
-        # 4. Quota i loop principal fluid
-        models_per_gen = max(1, int(self.config.llm_num_new_models))
-        target_quota = self.config.max_generations * models_per_gen
-        
+
+        # 4. Scheduler continu basat en target i buffer
+        target_models_total = self._target_models_total()
+        active_buffer_target = self._active_buffer_target(target_models_total)
+
         last_maintenance = 0.0
-        print(f"🌊 Iniciant loop fluid supervisat. Quota objectiu: {target_quota} models entrenats.")
-        
+        print(
+            f"🌊 Iniciant scheduler continu supervisat. "
+            f"Target={target_models_total} models entrenats, buffer={active_buffer_target}."
+        )
+
         try:
             while True:
                 now = time.time()
-                
+
                 # Manteniment periòdic (Heartbeat, Supervisor, Repairs)
                 if now - last_maintenance >= self.config.heartbeat_interval_seconds:
                     self._send_heartbeat()
+                    # El Worker valida la phase0 de les propostes que ell mateix crea
                     self._process_queued_proposals_phase0_if_enabled()
-                    self._process_training_rejections() # <-- Afegit aquí
-                    self.supervisor.ensure_alive() # El supervisor vigila i reinicia el trainer si cal
+                    self._process_training_rejections()
+                    self.supervisor.ensure_alive()
                     last_maintenance = now
-                
-                # Comprovar quota global
+
+                # Estat global i progress operatiu
                 counts = self._get_run_global_counts(run_id)
                 trained_count = counts["trained"]
                 active_count = counts["active"]
-                
-                if trained_count >= target_quota:
-                    print(f"✅ Quota assolida: {trained_count}/{target_quota} models entrenats.")
+                self._emit_progress_snapshot(
+                    run_id,
+                    counts,
+                    stage="running",
+                    stage_label=f"trained={trained_count}/{target_models_total} · active={active_count}/{active_buffer_target}",
+                )
+
+                if trained_count >= target_models_total and active_count == 0:
+                    print(f"✅ Target assolit i cua drenada: {trained_count}/{target_models_total} models entrenats.")
                     break
-                
-                # Si no hi ha prou models en marxa per omplir la quota
-                if active_count + trained_count < target_quota:
-                    # Calculem quina "generació" estem omplint (etiqueta metadata)
-                    current_gen = (trained_count // models_per_gen) + 1
-                    print(f"補充 Generant nous models per la quota (actual: {trained_count} trained, {active_count} active)...")
-                    self._run_generation_step(current_gen)
-                
+
+                self._replenish_active_buffer(run_id, counts, target_models_total, active_buffer_target)
                 time.sleep(10)
-                
+        except LlmRateLimitError as error:
+            final_status = "failed"
+            final_label = "Execució aturada per rate limit LLM"
+            self.api.add_event(run_id, "run_failed", final_label, {"error": str(error), "fatal_error": "llm_rate_limited"})
+            print(
+                json.dumps(
+                    {
+                        "progress_event": True,
+                        "run_id": run_id,
+                        "fatal_error": "llm_rate_limited",
+                        "stop_worker_loop": True,
+                        "stage": "failed",
+                        "stage_label": final_label,
+                    },
+                    ensure_ascii=True,
+                ),
+                flush=True,
+            )
+            raise
         except KeyboardInterrupt:
             print("\n👋 Worker interromput per l'usuari.")
+            final_status = "cancelled"
+            final_label = "Execució interrompuda per l'usuari"
+        except Exception as error:
+            final_status = "failed"
+            final_label = "Execució fallida"
+            try:
+                self.api.add_event(run_id, "run_failed", final_label, {"error": str(error)})
+            except Exception:
+                pass
+            raise
         finally:
-            # 5. Tancament segur
             self.supervisor.stop()
-            self.api.update_status(run_id, "completed", self.state.generation)
-            self.api.add_event(run_id, "run_completed", "Execució finalitzada")
-            self.state.status = "completed"
+            self.api.update_status(run_id, final_status, self.state.generation)
+            if final_status == "completed":
+                self.api.add_event(run_id, "run_completed", final_label)
+            counts = self._get_run_global_counts(run_id)
+            self._emit_progress_snapshot(run_id, counts, stage=final_status, stage_label=final_label)
+            self.state.status = final_status
             self.state.stage = "finished"
             self._save_state()
