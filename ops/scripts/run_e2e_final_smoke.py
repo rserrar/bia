@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 import sys
 import time
@@ -67,10 +66,22 @@ def _request_json(method: str, api_base_url: str, path: str, token: str, payload
 
 
 def _extract_last_json_block(text: str) -> dict:
-    matches = re.findall(r"\{[\s\S]*\}", text)
-    if not matches:
+    decoder = json.JSONDecoder()
+    last_payload: dict[str, Any] | None = None
+    for index, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            parsed, end = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        if text[index + end :].strip() != "":
+            continue
+        if isinstance(parsed, dict):
+            last_payload = parsed
+    if last_payload is None:
         raise RuntimeError("No JSON block found in output")
-    return json.loads(matches[-1])
+    return last_payload
 
 
 def _emit_progress(payload: dict[str, Any]) -> None:
