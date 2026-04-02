@@ -269,9 +269,10 @@ def main() -> int:
         raise RuntimeError("run_id missing in LLM trial output")
     trial_expected_models = int(trial_json.get("expected_models_total", generations * models_per_generation) or (generations * models_per_generation))
     trial_created_models = int(trial_json.get("proposals_created", 0) or 0)
-    partial_generation = (trial_rc != 0 or not trial_json.get("ok")) and trial_created_models > 0
+    trial_completed_successfully = str(trial_json.get("run_status", "")).strip() == "completed" and str(trial_json.get("latest_event_type", "")).strip() == "run_completed"
+    partial_generation = not trial_completed_successfully and (trial_rc != 0 or not trial_json.get("ok")) and trial_created_models > 0
     effective_expected_models = trial_created_models if partial_generation else trial_expected_models
-    if (trial_rc != 0 or not trial_json.get("ok")) and not partial_generation:
+    if (trial_rc != 0 or not trial_json.get("ok")) and not partial_generation and not trial_completed_successfully:
         raise RuntimeError(f"LLM trial failed: rc={trial_rc}, result={trial_json}")
 
     _emit_progress({
